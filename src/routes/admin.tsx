@@ -106,7 +106,7 @@ function Admin() {
           {edit && (
             <form className="space-y-3" onSubmit={(e) => {
               e.preventDefault();
-              if (!edit.name.trim() || edit.price <= 0) return toast.error("Name and a price above 0 are required.");
+              if (!edit.name.trim() || edit.price <= 0) { toast.error("Name and a price above 0 are required."); return; }
               s.saveProduct(edit); toast.success("Product saved"); setEdit(null);
             }}>
               <div><Label>Name</Label><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></div>

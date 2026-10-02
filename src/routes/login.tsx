@@ -34,7 +34,7 @@ function Login() {
           <form className="space-y-4 rounded-xl border bg-card p-6" onSubmit={(e) => {
             e.preventDefault();
             const u = login(li.email, li.password);
-            if (!u) return toast.error("Wrong email or password.");
+            if (!u) { toast.error("Wrong email or password."); return; }
             toast.success(`Welcome back, ${u.name}`); nav({ to: u.role === "admin" ? "/admin" : "/account" });
           }}>
             <div><Label>Email</Label><Input type="email" value={li.email} onChange={(e) => setLi({ ...li, email: e.target.value })} /></div>
@@ -46,9 +46,9 @@ function Login() {
         <TabsContent value="register">
           <form className="space-y-4 rounded-xl border bg-card p-6" onSubmit={(e) => {
             e.preventDefault();
-            if (!rg.name.trim() || !/^\S+@\S+\.\S+$/.test(rg.email) || rg.password.length < 6) return toast.error("Enter your name, a valid email and a password of 6+ characters.");
+            if (!rg.name.trim() || !/^\S+@\S+\.\S+$/.test(rg.email) || rg.password.length < 6) { toast.error("Enter your name, a valid email and a password of 6+ characters."); return; }
             const err = register(rg);
-            if (err) return toast.error(err);
+            if (err) { toast.error(err); return; }
             toast.success("Account created"); nav({ to: "/account" });
           }}>
             <div><Label>Full name</Label><Input value={rg.name} onChange={(e) => setRg({ ...rg, name: e.target.value })} maxLength={100} /></div>
