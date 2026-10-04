@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useStore } from "@/lib/store";
+import { useServerFn } from "@tanstack/react-start";
+import { login as loginFn, register as registerFn } from "@/lib/api.functions";
 
 export const Route = createFileRoute("/login")({
   head: () => ({
@@ -20,7 +22,9 @@ export const Route = createFileRoute("/login")({
 });
 
 function Login() {
-  const { login, register } = useStore();
+  const { refreshUser } = useStore();
+  const login = useServerFn(loginFn);
+  const register = useServerFn(registerFn);
   const nav = useNavigate();
   const [li, setLi] = useState({ email: "", password: "" });
   const [rg, setRg] = useState({ name: "", email: "", phone: "", password: "" });
@@ -31,24 +35,25 @@ function Login() {
       <Tabs defaultValue="login" className="mt-8">
         <TabsList className="grid w-full grid-cols-2"><TabsTrigger value="login">Sign in</TabsTrigger><TabsTrigger value="register">Create account</TabsTrigger></TabsList>
         <TabsContent value="login">
-          <form className="space-y-4 rounded-xl border bg-card p-6" onSubmit={(e) => {
+          <form className="space-y-4 rounded-xl border bg-card p-6" onSubmit={async (e) => {
             e.preventDefault();
-            const u = login(li.email, li.password);
-            if (!u) { toast.error("Wrong email or password."); return; }
+            const r = await login({ data: li }).catch(() => ({ error: "Wrong email or password." }));
+            if ("error" in r || !r.user) { toast.error(("error" in r && r.error) || "Sign in failed."); return; }
+            const u = r.user; await refreshUser();
             toast.success(`Welcome back, ${u.name}`); nav({ to: u.role === "admin" ? "/admin" : "/account" });
           }}>
             <div><Label>Email</Label><Input type="email" value={li.email} onChange={(e) => setLi({ ...li, email: e.target.value })} /></div>
             <div><Label>Password</Label><Input type="password" value={li.password} onChange={(e) => setLi({ ...li, password: e.target.value })} /></div>
             <Button type="submit" className="w-full">Sign in</Button>
-            <p className="rounded-md bg-muted p-3 text-xs text-muted-foreground">Demo: admin@polarfiber.com.et / admin123 — or abebe@example.com / customer123</p>
           </form>
         </TabsContent>
         <TabsContent value="register">
-          <form className="space-y-4 rounded-xl border bg-card p-6" onSubmit={(e) => {
+          <form className="space-y-4 rounded-xl border bg-card p-6" onSubmit={async (e) => {
             e.preventDefault();
             if (!rg.name.trim() || !/^\S+@\S+\.\S+$/.test(rg.email) || rg.password.length < 6) { toast.error("Enter your name, a valid email and a password of 6+ characters."); return; }
-            const err = register(rg);
-            if (err) { toast.error(err); return; }
+            const r = await register({ data: rg }).catch(() => ({ error: "Could not create account." }));
+            if ("error" in r) { toast.error(r.error); return; }
+            await refreshUser();
             toast.success("Account created"); nav({ to: "/account" });
           }}>
             <div><Label>Full name</Label><Input value={rg.name} onChange={(e) => setRg({ ...rg, name: e.target.value })} maxLength={100} /></div>
