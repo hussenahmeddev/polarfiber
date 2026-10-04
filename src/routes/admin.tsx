@@ -10,7 +10,30 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/StatusBadge";
 import { CATEGORIES, ORDER_STATUSES, QUOTE_STATUSES, etb, type Category, type Product } from "@/lib/data";
-import { useStore } from "@/lib/store";
+import { useStore, productsKey } from "@/lib/store";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
+import { getAdminData, saveProduct, deleteProduct, setOrderStatus, setQuoteStatus } from "@/lib/api.functions";
+import type { OrderStatus, QuoteStatus } from "@/lib/data";
+
+function useAdmin(enabled: boolean) {
+  const qc = useQueryClient();
+  const fetchData = useServerFn(getAdminData);
+  const q = useQuery({ queryKey: ["admin"], queryFn: () => fetchData(), enabled });
+  const save = useServerFn(saveProduct), del = useServerFn(deleteProduct), os = useServerFn(setOrderStatus), qs = useServerFn(setQuoteStatus);
+  const run = async (fn: () => Promise<unknown>) => {
+    try { await fn(); } catch (e) { toast.error(e instanceof Error ? e.message : "Something went wrong."); }
+    await qc.invalidateQueries({ queryKey: ["admin"] }); await qc.invalidateQueries({ queryKey: productsKey });
+  };
+  return {
+    loading: q.isLoading,
+    orders: q.data?.orders ?? [], quotes: q.data?.quotes ?? [], products: q.data?.products ?? [], users: q.data?.users ?? [],
+    saveProduct: (p: Product) => run(() => save({ data: p })),
+    deleteProduct: (id: number) => run(() => del({ data: { id } })),
+    setOrderStatus: (id: number, status: OrderStatus) => run(() => os({ data: { id, status } })),
+    setQuoteStatus: (id: number, status: QuoteStatus) => run(() => qs({ data: { id, status } })),
+  };
+}
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -29,9 +52,10 @@ const empty: Product = { product_id: 0, name: "", category: "Water Tankers", cap
 const sel = "h-9 rounded-md border bg-background px-2 text-sm";
 
 function Admin() {
-  const s = useStore();
+  const { user } = useStore();
+  const s = useAdmin(user?.role === "admin");
   const [edit, setEdit] = useState<Product | null>(null);
-  if (s.user?.role !== "admin") return <div className="mx-auto max-w-md px-4 py-20 text-center"><p>Admins only. Please sign in with an admin account.</p><Button asChild className="mt-4"><Link to="/login">Sign in</Link></Button></div>;
+  if (user?.role !== "admin") return <div className="mx-auto max-w-md px-4 py-20 text-center"><p>Admins only. Please sign in with an admin account.</p><Button asChild className="mt-4"><Link to="/login">Sign in</Link></Button></div>;
 
   const revenue = s.orders.filter((o) => o.status !== "Cancelled").reduce((t, o) => t + o.total, 0);
   const stats = [
@@ -107,7 +131,7 @@ function Admin() {
             <form className="space-y-3" onSubmit={(e) => {
               e.preventDefault();
               if (!edit.name.trim() || edit.price <= 0) { toast.error("Name and a price above 0 are required."); return; }
-              s.saveProduct(edit); toast.success("Product saved"); setEdit(null);
+              void s.saveProduct(edit).then(() => toast.success("Product saved")); setEdit(null);
             }}>
               <div><Label>Name</Label><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></div>
               <div className="grid grid-cols-2 gap-3">
