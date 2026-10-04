@@ -6,7 +6,7 @@ const COOKIE = "pf_session";
 const MAX_AGE = 60 * 60 * 24 * 14;
 
 function sign(v: string) {
-  return createHmac("sha256", process.env.SESSION_SECRET!).update(v).digest("base64url");
+  return createHmac("sha256", process.env['SESSION_SECRET']!).update(v).digest("base64url");
 }
 
 export function startSession(userId: number) {

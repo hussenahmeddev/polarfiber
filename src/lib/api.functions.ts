@@ -141,6 +141,7 @@ export const saveProduct = createServerFn({ method: "POST" })
     await requireAdmin();
     await withDb(async (c) => {
       const cat = (await rows<{ category_id: number }>(c, "SELECT category_id FROM categories WHERE name=?", [data.category as Category]))[0];
+      if (!cat) throw new Error("Unknown category.");
       const v = [cat.category_id, data.name, data.capacity || null, data.price, data.stock, data.image, data.description];
       if (data.product_id === 0) await c.execute("INSERT INTO products (category_id,name,capacity,price,stock,image,description) VALUES (?,?,?,?,?,?,?)", v);
       else await c.execute("UPDATE products SET category_id=?,name=?,capacity=?,price=?,stock=?,image=?,description=? WHERE product_id=?", [...v, data.product_id]);
