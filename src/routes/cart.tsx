@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { etb } from "@/lib/data";
 import { useStore } from "@/lib/store";
+import { useServerFn } from "@tanstack/react-start";
+import { placeOrder as placeOrderFn } from "@/lib/api.functions";
 
 export const Route = createFileRoute("/cart")({
   head: () => ({
@@ -21,7 +23,9 @@ export const Route = createFileRoute("/cart")({
 });
 
 function Cart() {
-  const { cart, products, setCartQty, user, placeOrder } = useStore();
+  const { cart, products, setCartQty, user, clearCart } = useStore();
+  const placeOrder = useServerFn(placeOrderFn);
+  const [busy, setBusy] = useState(false);
   const [address, setAddress] = useState("");
   const nav = useNavigate();
   const lines = cart.map((c) => ({ ...c, p: products.find((p) => p.product_id === c.product_id) })).filter((l) => l.p);
@@ -49,14 +53,15 @@ function Cart() {
         <p className="font-display text-3xl font-bold text-primary">{etb(total)}</p>
         <p className="mt-1 text-xs text-muted-foreground">Payment on delivery. Our team will call to confirm.</p>
         {user ? (
-          <form className="mt-6 space-y-3" onSubmit={(e) => {
+          <form className="mt-6 space-y-3" onSubmit={async (e) => {
             e.preventDefault();
             if (!address.trim()) { toast.error("Please enter a delivery address."); return; }
-            const o = placeOrder(address.trim());
-            if (o) { toast.success(`Order #${o.order_id} placed!`); nav({ to: "/account" }); }
+            setBusy(true);
+            try { const o = await placeOrder({ data: { address: address.trim(), items: cart } }); clearCart(); toast.success(`Order #${o.order_id} placed!`); nav({ to: "/account" }); }
+            catch (err) { toast.error(err instanceof Error ? err.message : "Could not place order."); } finally { setBusy(false); }
           }}>
             <div><Label>Delivery address</Label><Input value={address} onChange={(e) => setAddress(e.target.value)} maxLength={200} placeholder="Sub-city, Addis Ababa" /></div>
-            <Button type="submit" size="lg" className="w-full">Place order</Button>
+            <Button type="submit" size="lg" className="w-full" disabled={busy}>{busy ? "Placing..." : "Place order"}</Button>
           </form>
         ) : (
           <Button asChild size="lg" className="mt-6 w-full"><Link to="/login">Sign in to order</Link></Button>

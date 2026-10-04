@@ -11,5 +11,9 @@
 
 # AGENTS.md
 
-- Phase 1 data lives in a browser-only store (`src/lib/store.tsx`) seeded from `src/lib/data.ts`; field names mirror the planned MySQL schema so swapping to server functions is a drop-in replacement. Why: user chose "website first, database later".
-- Demo auth/roles in the store are NOT secure; real auth and role checks must move server-side when the database is connected. Why: client-side role checks can be bypassed.
+- Data lives in Aiven MySQL, reached only from server functions (`src/lib/api.functions.ts` → `db.server.ts`); schema in `db/schema.sql`, applied by `node db/setup.mjs`. Why: credentials must never reach the browser.
+- MySQL connection opens per request and closes after. Why: the edge server runtime cannot keep long-lived pools.
+- Auth is a server-signed httpOnly cookie (HMAC with SESSION_SECRET), passwords hashed with bcryptjs. Why: no third-party auth provider is used.
+- Roles live in the separate `user_roles` table and are checked server-side on every admin call; the first registered account becomes admin. Why: prevent privilege escalation via profile edits.
+- Order prices are recomputed from the database on the server. Why: browser-sent prices cannot be trusted.
+- Cart is kept in browser localStorage only. Why: it is pre-order scratch data.
