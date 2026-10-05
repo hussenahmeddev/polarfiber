@@ -25,9 +25,15 @@ function Products() {
   const { products } = useStore();
   const [q, setQ] = useState("");
   const [cat, setCat] = useState<string>("All");
-  const list = products.filter(
-    (p) => (cat === "All" || p.category === cat) && p.name.toLowerCase().includes(q.toLowerCase()),
-  );
+  const [sort, setSort] = useState("default");
+  const list = products
+    .filter(
+      (p) =>
+        (cat === "All" || p.category === cat) && p.name.toLowerCase().includes(q.toLowerCase()),
+    )
+    .sort((a, b) =>
+      sort === "low" ? a.price - b.price : sort === "high" ? b.price - a.price : sort === "name" ? a.name.localeCompare(b.name) : 0,
+    );
   return (
     <div className="mx-auto max-w-6xl px-4 py-12">
       <h1 className="text-4xl font-bold">Our products</h1>
@@ -52,6 +58,17 @@ function Products() {
             </button>
           ))}
         </div>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+          aria-label="Sort products"
+          className="h-9 rounded-md border bg-card px-3 text-sm md:ml-auto"
+        >
+          <option value="default">Featured</option>
+          <option value="low">Price: low to high</option>
+          <option value="high">Price: high to low</option>
+          <option value="name">Name A–Z</option>
+        </select>
       </div>
       <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {list.map((p) => (
