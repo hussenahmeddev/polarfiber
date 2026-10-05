@@ -110,6 +110,32 @@ function Home() {
       </section>
 
       <section className="mx-auto mt-20 max-w-6xl px-4">
+        <h2 className="text-3xl font-bold">Who we serve</h2>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {["Homes", "Farms & agriculture", "Businesses", "Industry"].map((s) => (
+            <div key={s} className="rounded-xl bg-secondary p-5 font-semibold">{s}</div>
+          ))}
+        </div>
+      </section>
+
+      <section className="mx-auto mt-20 max-w-6xl px-4">
+        <h2 className="text-3xl font-bold">How it works</h2>
+        <ol className="mt-6 grid gap-6 md:grid-cols-4">
+          {["Browse products", "Request a quote or add to cart", "We confirm your order", "Delivery & installation"].map(
+            (s, i) => (
+              <li key={s} className="rounded-xl border bg-card p-5">
+                <span className="grid h-8 w-8 place-items-center rounded-full bg-primary text-sm font-bold text-primary-foreground">
+                  {i + 1}
+                </span>
+                <p className="mt-3 font-semibold">{s}</p>
+              </li>
+            ),
+          )}
+        </ol>
+      </section>
+
+
+      <section className="mx-auto mt-20 max-w-6xl px-4">
         <div className="flex flex-col items-start justify-between gap-6 rounded-2xl bg-secondary p-8 md:flex-row md:items-center">
           <div>
             <h2 className="text-2xl font-bold">Your water storage solution starts here</h2>

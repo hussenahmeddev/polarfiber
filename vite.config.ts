@@ -9,6 +9,7 @@ export default defineConfig({
     tsConfigPaths(),
     tailwindcss(),
     tanstackStart({
+      srcDirectory: ".",
       // Tell TanStack Start where all entry points are
       router: {
         entry: "frontend/router",

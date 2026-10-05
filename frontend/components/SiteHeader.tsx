@@ -5,6 +5,8 @@ import { useStore } from "@/frontend/store";
 const nav = [
   { to: "/", label: "Home" },
   { to: "/products", label: "Products" },
+  { to: "/about", label: "About" },
+  { to: "/contact", label: "Contact" },
   { to: "/quote", label: "Get a Quote" },
 ] as const;
 
