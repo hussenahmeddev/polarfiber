@@ -1,19 +1,46 @@
-<!-- LOVABLE:BEGIN -->
-> [!IMPORTANT]
-> This project is connected to [Lovable](https://lovable.dev). Avoid rewriting
-> published git history — force pushing, or rebasing/amending/squashing commits
-> that are already pushed — as it rewrites history on Lovable's side and the
-> user will likely lose their project history.
->
-> Commits you push to the connected branch sync back to Lovable and show up in
-> the editor, so keep the branch in a working state.
-<!-- LOVABLE:END -->
-
 # AGENTS.md
 
-- Data lives in Aiven MySQL, reached only from server functions (`src/lib/api.functions.ts` → `db.server.ts`); schema in `db/schema.sql`, applied by `node db/setup.mjs`. Why: credentials must never reach the browser.
-- MySQL connection opens per request and closes after. Why: the edge server runtime cannot keep long-lived pools.
-- Auth is a server-signed httpOnly cookie (HMAC with SESSION_SECRET), passwords hashed with bcryptjs. Why: no third-party auth provider is used.
-- Roles live in the separate `user_roles` table and are checked server-side on every admin call; the first registered account becomes admin. Why: prevent privilege escalation via profile edits.
-- Order prices are recomputed from the database on the server. Why: browser-sent prices cannot be trusted.
-- Cart is kept in browser localStorage only. Why: it is pre-order scratch data.
+## Project structure
+
+```
+polarfiber/
+  backend/          ← server-only code (never sent to the browser)
+    api.functions.ts
+    db.server.ts
+    session.server.ts
+    error-capture.ts
+    error-page.ts
+    server.ts       ← SSR error-handling wrapper (framework entry point)
+    start.ts        ← TanStack Start instance with CSRF & error middleware
+  frontend/         ← React UI: components, routes, store, styles
+    components/
+    hooks/
+    routes/
+    router.tsx
+    store.tsx
+    styles.css
+    utils.ts
+  shared/           ← types used by both sides
+    data.ts
+  db/               ← MySQL schema and setup scripts
+```
+
+## Architecture rules
+
+- Data lives in Aiven MySQL, reached only from server functions (`backend/api.functions.ts` → `db.server.ts`); schema in `db/schema.sql`, applied by `node db/setup.mjs`. Credentials must never reach the browser.
+- MySQL connection opens per request and closes after. The edge server runtime cannot keep long-lived pools.
+- Auth is a server-signed httpOnly cookie (HMAC with SESSION_SECRET), passwords hashed with bcryptjs. No third-party auth provider is used.
+- Roles live in the separate `user_roles` table and are checked server-side on every admin call; the first registered account becomes admin. This prevents privilege escalation via profile edits.
+- Order prices are recomputed from the database on the server. Browser-sent prices cannot be trusted.
+- Cart is kept in browser localStorage only — it is pre-order scratch data.
+
+## Import conventions
+
+| What you need | Import from |
+|---|---|
+| Shared types (Product, Order, etc.) | `@/shared/data` |
+| Server functions / DB / session | `@/backend/api.functions`, `@/backend/db.server`, `@/backend/session.server` |
+| React store | `@/frontend/store` |
+| UI utilities (`cn`) | `@/frontend/utils` |
+| UI components | `@/frontend/components/...` |
+| Routes | `@/frontend/routes/...` |
