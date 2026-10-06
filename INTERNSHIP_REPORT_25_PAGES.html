@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Haramaya University Internship Report - Hussen Ahmed (Polar Fiber)</title>
+<style>
+  @page {
+    size: A4 portrait;
+    margin: 20mm 20mm 25mm 20mm;
+  }
+  body {
+    font-family: "Times New Roman", Times, serif;
+    font-size: 12pt;
+    line-height: 1.6;
+    color: #111;
+    margin: 0;
+    padding: 20px;
+  }
+  .page-break {
+    page-break-before: always;
+    break-before: page;
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px dashed #ccc;
+  }
+  @media print {
+    .page-break {
+      border-top: none;
+      margin-top: 0;
+      padding-top: 0;
+    }
+    body { padding: 0; }
+  }
+  h1, h2, h3, h4 {
+    font-family: Arial, Helvetica, sans-serif;
+    color: #0b2545;
+  }
+  h1 { font-size: 18pt; text-align: center; text-transform: uppercase; margin-bottom: 8px; }
+  h2 { font-size: 14pt; border-bottom: 1.5px solid #0b2545; padding-bottom: 4px; margin-top: 24px; }
+  h3 { font-size: 12pt; margin-top: 16px; }
+  p, li { text-align: justify; text-justify: inter-word; }
+  .cover-page {
+    text-align: center;
+    min-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .cover-header h1 { font-size: 18pt; margin: 4px 0; }
+  .cover-header h2 { font-size: 14pt; margin: 4px 0; border: none; }
+  .cover-title { margin: 50px 0; }
+  .cover-title h2 { font-size: 15pt; color: #134074; border: none; line-height: 1.4; }
+  .cover-meta {
+    margin: 30px auto;
+    width: 90%;
+    text-align: left;
+    border-collapse: collapse;
+  }
+  .cover-meta td { padding: 7px 12px; font-size: 11pt; }
+  .cover-meta tr td:first-child { font-weight: bold; width: 40%; color: #0b2545; }
+  table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 10.5pt;
+  }
+  table.data-table th, table.data-table td {
+    border: 1px solid #333;
+    padding: 7px 10px;
+    text-align: left;
+  }
+  table.data-table th { background-color: #eef4f8; color: #0b2545; font-family: Arial, sans-serif; }
+  .sig-line { margin-top: 30px; display: flex; justify-content: space-between; }
+  .sig-box { width: 45%; }
+  .box-note {
+    background: #f0f7fa;
+    border: 1px solid #bcdbeb;
+    border-left: 5px solid #0077b6;
+    padding: 10px 15px;
+    margin: 12px 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="cover-page">
+  <div class="cover-header">
+    <h1>HARAMAYA UNIVERSITY</h1>
+    <h2>COLLEGE OF COMPUTING AND INFORMATICS</h2>
+    <h2>DEPARTMENT OF INFORMATION TECHNOLOGY</h2>
+  </div>
+
+  <div class="cover-title">
+    <p style="font-size: 13pt; letter-spacing: 1px; font-weight: bold; color: #555;">FINAL INTERNSHIP PRACTICAL ATTACHMENT REPORT</p>
+    <h2>DESIGN AND IMPLEMENTATION OF A SECURE FULL-STACK WEB-BASED MANAGEMENT AND E-COMMERCE SYSTEM FOR POLAR FIBER</h2>
+    <p style="font-style: italic; margin-top: 15px;">Submitted in Partial Fulfillment of the Requirements for the Degree of Bachelor of Science in Information Technology</p>
+  </div>
+
+  <table class="cover-meta">
+    <tr><td>Student Name:</td><td><strong>Hussen Ahmed</strong></td></tr>
+    <tr><td>Student ID Number:</td><td><strong>1608/16</strong></td></tr>
+    <tr><td>Department & College:</td><td>Department of Information Technology, CCI</td></tr>
+    <tr><td>Hosting Organization:</td><td><strong>Polar Fiber Enterprise</strong> (Addis Ababa, Ethiopia)</td></tr>
+    <tr><td>Company Immediate Supervisor:</td><td><strong>Teha Mohammed</strong> (Tech & Infrastructure Lead)</td></tr>
+    <tr><td>University Academic Advisor:</td><td><strong>Mekonnen (M.Sc.)</strong> (Lecturer, IT Dept.)</td></tr>
+    <tr><td>Internship Period:</td><td>July 9, 2026 – August 28, 2026 (Summer Attachment)</td></tr>
+    <tr><td>Submission Date:</td><td>October 2026</td></tr>
+  </table>
+</div>
+
+<div class="page-break"></div>
+
+<h1>DECLARATION AND APPROVAL</h1>
+<h3>Student Declaration</h3>
+<p>I, <strong>Hussen Ahmed</strong> (ID: <strong>1608/16</strong>), declare that this internship report entitled <em>"Design and Implementation of a Secure Full-Stack Web-Based Management and E-Commerce System for Polar Fiber"</em> represents my original practical work conducted during the summer internship attachment at Polar Fiber Enterprise, Addis Ababa, from July 9, 2026 to August 28, 2026 under the supervision of academic advisor <strong>Mekonnen (M.Sc.)</strong> and hosting company supervisor <strong>Ato Teha Mohammed</strong>.</p>
+
+<div class="sig-line">
+  <div class="sig-box">
+    <p>Student Name: <strong>Hussen Ahmed</strong></p>
+    <p>Signature: ___________________________</p>
+    <p>Date: _______________________________</p>
+  </div>
+</div>
+
+<hr style="margin: 30px 0;">
+
+<h3>Approval of Mentors</h3>
+<div class="sig-line">
+  <div class="sig-box">
+    <p><strong>University Advisor:</strong> Mekonnen (M.Sc.)</p>
+    <p>Signature: ___________________________</p>
+    <p>Date: _______________________________</p>
+  </div>
+  <div class="sig-box">
+    <p><strong>Company Supervisor:</strong> Teha Mohammed</p>
+    <p>Signature: ___________________________</p>
+    <p>Date: _______________________________</p>
+  </div>
+</div>
+
+<div class="page-break"></div>
+
+<h1>EXECUTIVE SUMMARY</h1>
+<p>This report documents the design and development of an enterprise e-commerce and operations management platform for <strong>Polar Fiber</strong> (Addis Ababa, Ethiopia). Using <strong>TanStack Start</strong>, <strong>React 19</strong>, <strong>TypeScript</strong>, <strong>Tailwind CSS v4</strong>, and <strong>Aiven Cloud MySQL 8</strong> with SSL encryption, the intern transformed manual, phone-based inquiry and ordering operations into a secure, automated web platform featuring real-time product catalogs, quotation intake, tamper-proof ordering, customer dashboards, and an administrative suite.</p>
+
+<div class="page-break"></div>
+
+<h1>CHAPTER ONE: INTRODUCTION & COMPANY PROFILE</h1>
+<h2>1.1 Company Background</h2>
+<p><strong>Polar Fiber</strong> is an Ethiopian manufacturing company based in Addis Ababa (Jemoo Furi 2), specializing in food-grade rotomolded water tankers (backed by a 10-year warranty), fiber pipes, flower pots, and roofing sheets (`polarfiber.com.et`).</p>
+
+<h2>1.2 Main Products</h2>
+<table class="data-table">
+  <tr><th>Category</th><th>Capacities</th><th>Specs</th><th>Application</th></tr>
+  <tr><td>Water Tankers</td><td>500L to 25,000L</td><td>Food-grade LLDPE, UV-stabilized, 10-yr warranty</td><td>Homes, commercial, farms</td></tr>
+  <tr><td>Flower Pots</td><td>Molded Garden Pots</td><td>Impact-resistant polymer</td><td>Residential, hotels</td></tr>
+  <tr><td>Roof Sheets</td><td>Corrugated Fiber Sheets</td><td>Corrosion-free composite</td><td>Warehouses, sheds</td></tr>
+  <tr><td>Fiber Pipes</td><td>4-inch Fiber Pipes</td><td>High burst-pressure resistance</td><td>Drainage, water lines</td></tr>
+</table>
+
+<div class="page-break"></div>
+
+<h1>CHAPTER TWO: INTERNSHIP EXPERIENCE</h1>
+<p>Assigned to the <strong>Information System & Infrastructure</strong> section under <strong>Ato Teha Mohammed</strong>, the intern applied concepts in Web Systems, Database Normalization, and Computer Security to construct a full-stack production system with zero-trust pricing and HMAC-SHA256 session authentication.</p>
+
+<div class="page-break"></div>
+
+<h1>CHAPTER THREE: SYSTEM DESIGN & IMPLEMENTATION</h1>
+<p>The platform features a Three-Tier architecture (React 19 UI, TanStack Start Server Functions, and Aiven Cloud MySQL 8), a normalized 3NF relational schema (7 tables), and cryptographic cookie authentication with role-based access control.</p>
+
+<div class="page-break"></div>
+
+<h1>CHAPTER FOUR & FIVE: REFLECTIONS, CONCLUSION & RECOMMENDATIONS</h1>
+<p>The practical attachment provided immense growth in software engineering, technical problem-solving, work ethics, and team leadership. Recommendations include cloud deployment on the official domain, payment gateway integration (Telebirr/CBE Birr), and ongoing collaboration with Haramaya University.</p>
+
+</body>
+</html>
