@@ -1,6 +1,6 @@
 # Polar Fiber upgrade roadmap (from production brief)
 
-- [ ] Match the public UI to polarfiber.com.et: logo, blue photo banner, free quote form, About and product gallery
+- [x] Match the public UI to polarfiber.com.et: logo, blue photo banner, free quote form, About and product gallery
 - [x] Phase 1 — Public website: richer homepage, About, Contact, catalog sorting
 - [ ] Phase 2 — Customer portal: order tracking timeline, profile editing, quote-to-order
 - [ ] Phase 3 — Inventory: stock movements, low-stock alerts, stock deducted on confirm
