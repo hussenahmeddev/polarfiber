@@ -33,6 +33,7 @@ polarfiber/
 - Roles live in the separate `user_roles` table and are checked server-side on every admin call; the first registered account becomes admin. This prevents privilege escalation via profile edits.
 - Order prices are recomputed from the database on the server. Browser-sent prices cannot be trusted.
 - Cart is kept in browser localStorage only — it is pre-order scratch data.
+- Public-page media is served from local public/images assets, and the homepage quote form calls the existing quote server function; no duplicate submission endpoint is introduced.
 
 ## Import conventions
 

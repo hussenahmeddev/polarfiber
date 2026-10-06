@@ -13,6 +13,8 @@ import { placeOrder as placeOrderFn } from "@/backend/api.functions";
 export const Route = createFileRoute("/cart")({
   head: () => ({
     meta: [
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
       { title: "Your Cart — Polar Fiber" },
       { name: "description", content: "Review your items and place your order." },
       { property: "og:title", content: "Your Cart — Polar Fiber" },

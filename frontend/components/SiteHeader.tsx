@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
-import { Droplets, ShoppingCart, User } from "lucide-react";
+import { ShoppingCart, User } from "lucide-react";
+import { Button } from "@/frontend/components/ui/button";
 import { useStore } from "@/frontend/store";
 
 const nav = [
@@ -19,31 +20,30 @@ export function SiteHeader() {
   ];
 
   return (
-    <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur">
-      <div className="mx-auto flex h-16 max-w-6xl items-center gap-6 px-4">
+    <header className="reference-header sticky top-0 z-40 border-b">
+      <div className="reference-header-inner">
         <Link
           to="/"
-          className="flex items-center gap-2 font-display text-lg font-bold text-primary"
+          className="shrink-0"
+          aria-label="Polar Fiber home"
         >
-          <span className="grid h-9 w-9 place-items-center rounded-lg bg-water text-deep-foreground">
-            <Droplets className="h-5 w-5" />
-          </span>
-          Polar Fiber
+          <img src="/images/logo.png" className="reference-logo" alt="Polar Fiber" width={112} height={48} />
         </Link>
-        <nav className="hidden gap-1 md:flex">
+        <nav className="reference-nav" aria-label="Main navigation">
           {items.map((n) => (
             <Link
               key={n.to}
               to={n.to}
               activeOptions={{ exact: n.to === "/" }}
-              className="rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+              className="whitespace-nowrap py-2 font-medium text-foreground"
               activeProps={{ className: "text-primary" }}
             >
               {n.label}
             </Link>
           ))}
         </nav>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1 md:ml-0">
+          <Button asChild className="reference-button hidden lg:inline-flex"><Link to="/contact">Contact</Link></Button>
           <Link to="/cart" className="relative rounded-md p-2 hover:bg-muted" aria-label="Cart">
             <ShoppingCart className="h-5 w-5" />
             {count > 0 && (
@@ -57,11 +57,11 @@ export function SiteHeader() {
             className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium hover:bg-muted"
           >
             <User className="h-4 w-4" />
-            {user ? user.name.split(" ")[0] : "Sign in"}
+            <span className="hidden sm:inline">{user ? user.name.split(" ")[0] : "Sign in"}</span>
           </Link>
         </div>
       </div>
-      <nav className="flex gap-1 overflow-x-auto border-t px-4 py-2 md:hidden">
+      <nav aria-label="Mobile navigation" className="flex gap-1 overflow-x-auto border-t px-4 py-3 md:hidden">
         {items.map((n) => (
           <Link
             key={n.to}
@@ -80,10 +80,10 @@ export function SiteHeader() {
 
 export function SiteFooter() {
   return (
-    <footer className="mt-24 bg-deep text-deep-foreground">
+    <footer className="reference-footer border-t">
       <div className="mx-auto grid max-w-6xl gap-8 px-4 py-12 md:grid-cols-3">
         <div>
-          <p className="font-display text-lg font-bold">Polar Fiber</p>
+          <img src="/images/logo.png" alt="Polar Fiber" className="reference-logo" width={112} height={48} />
           <p className="mt-2 text-sm opacity-75">
             Where Quality Meets Every Drop. Food-grade water tankers with a 10-year warranty.
           </p>

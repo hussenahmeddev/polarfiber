@@ -63,6 +63,8 @@ function useAdmin(enabled: boolean) {
 export const Route = createFileRoute("/admin")({
   head: () => ({
     meta: [
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
       { title: "Admin Dashboard — Polar Fiber" },
       { name: "description", content: "Manage products, orders, quotes and customers." },
       { property: "og:title", content: "Admin Dashboard — Polar Fiber" },
