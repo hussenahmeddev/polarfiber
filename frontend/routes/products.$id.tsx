@@ -9,6 +9,8 @@ import { useStore } from "@/frontend/store";
 export const Route = createFileRoute("/products/$id")({
   head: () => ({
     meta: [
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
       { title: "Product details — Polar Fiber" },
       { name: "description", content: "Product details, price and availability at Polar Fiber." },
       { property: "og:title", content: "Product details — Polar Fiber" },

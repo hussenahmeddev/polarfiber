@@ -12,6 +12,8 @@ import { submitQuote as submitQuoteFn } from "@/backend/api.functions";
 export const Route = createFileRoute("/quote")({
   head: () => ({
     meta: [
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
       { title: "Request a Free Quote — Polar Fiber" },
       {
         name: "description",

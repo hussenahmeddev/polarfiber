@@ -10,6 +10,8 @@ import { getMyAccount } from "@/backend/api.functions";
 export const Route = createFileRoute("/account")({
   head: () => ({
     meta: [
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
       { title: "My Account — Polar Fiber" },
       { name: "description", content: "Your Polar Fiber orders and quote requests." },
       { property: "og:title", content: "My Account — Polar Fiber" },

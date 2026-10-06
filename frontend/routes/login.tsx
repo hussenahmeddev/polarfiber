@@ -12,6 +12,8 @@ import { login as loginFn, register as registerFn } from "@/backend/api.function
 export const Route = createFileRoute("/login")({
   head: () => ({
     meta: [
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
       { title: "Sign in — Polar Fiber" },
       { name: "description", content: "Sign in or create a Polar Fiber customer account." },
       { property: "og:title", content: "Sign in — Polar Fiber" },
