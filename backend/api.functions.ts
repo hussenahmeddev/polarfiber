@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { withDb, rows } from "./db.server";
-import { currentUser, endSession, requireAdmin, requireUser, startSession } from "./session.server";
+import { currentUser, endSession, loadUser, requireAdmin, requireUser, startSession } from "./session.server";
 import type { Category, Order, OrderStatus, Product, Quote, QuoteStatus } from "../shared/data";
 import { CATEGORIES, ORDER_STATUSES, QUOTE_STATUSES } from "../shared/data";
 
