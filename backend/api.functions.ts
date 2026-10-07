@@ -43,7 +43,7 @@ export const login = createServerFn({ method: "POST" })
     if (!found[0] || !(await bcrypt.compare(data.password, found[0].password_hash)))
       return { error: "Wrong email or password." };
     startSession(found[0].user_id);
-    return { user: await currentUser() };
+    return { user: await loadUser(found[0].user_id) };
   });
 
 export const register = createServerFn({ method: "POST" })
@@ -76,7 +76,7 @@ export const register = createServerFn({ method: "POST" })
     });
     if (!uid) return { error: "An account with this email already exists." };
     startSession(uid);
-    return { user: await currentUser() };
+    return { user: await loadUser(uid) };
   });
 
 export const logout = createServerFn({ method: "POST" }).handler(async () => {

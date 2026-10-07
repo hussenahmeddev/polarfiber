@@ -49,6 +49,12 @@ export type SessionUser = User;
 export async function currentUser(): Promise<SessionUser | null> {
   const uid = sessionUserId();
   if (!uid) return null;
+  return loadUser(uid);
+}
+
+// Reads a user by id. Used right after sign-in, when the new cookie
+// is only on the response and not yet on the incoming request.
+export async function loadUser(uid: number): Promise<SessionUser | null> {
   return withDb(async (c) => {
     const r = await rows<SessionUser>(
       c,
