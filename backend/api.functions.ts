@@ -198,6 +198,103 @@ export const getMyAccount = createServerFn({ method: "GET" }).handler(async () =
   return { orders, quotes };
 });
 
+export const getMyDashboard = createServerFn({ method: "GET" }).handler(async () => {
+  const u = await requireUser();
+  const recentOrders = await loadOrders("WHERE o.user_id=? LIMIT 5", [u.user_id]);
+  return withDb(async (c) => {
+    const [orderStats] = await rows<{
+      active_orders: number;
+      delivered_orders: number;
+    }>(
+      c,
+      `SELECT
+        COUNT(CASE WHEN status IN ('Pending', 'Confirmed', 'In Production') THEN 1 END) as active_orders,
+        COUNT(CASE WHEN status = 'Delivered' THEN 1 END) as delivered_orders
+       FROM orders WHERE user_id=?`,
+      [u.user_id],
+    );
+
+    const [quoteStats] = await rows<{ open_quotes: number }>(
+      c,
+      `SELECT COUNT(*) as open_quotes FROM quote_requests WHERE (user_id=? OR email=?) AND status='New'`,
+      [u.user_id, u.email],
+    );
+
+    return {
+      stats: {
+        activeOrders: Number(orderStats?.active_orders ?? 0),
+        deliveredOrders: Number(orderStats?.delivered_orders ?? 0),
+        openQuotes: Number(quoteStats?.open_quotes ?? 0),
+      },
+      recentOrders,
+    };
+  });
+});
+
+export const getMyOrders = createServerFn({ method: "GET" }).handler(async () => {
+  const u = await requireUser();
+  return loadOrders("WHERE o.user_id=?", [u.user_id]);
+});
+
+export const getMyQuotes = createServerFn({ method: "GET" }).handler(async () => {
+  const u = await requireUser();
+  return withDb((c) =>
+    rows<Quote>(c, `${QUOTE_SQL} WHERE user_id=? OR email=? ORDER BY quote_id DESC`, [
+      u.user_id,
+      u.email,
+    ]),
+  );
+});
+
+export const updateMyProfile = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        name: z.string().trim().min(1, "Name cannot be empty").max(100),
+        phone: z.string().trim().max(20),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    await withDb((c) =>
+      c.execute("UPDATE users SET name=?, phone=? WHERE user_id=?", [
+        data.name,
+        data.phone,
+        u.user_id,
+      ]),
+    );
+    const updatedUser = await loadUser(u.user_id);
+    return { user: updatedUser };
+  });
+
+export const changeMyPassword = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        currentPassword: z.string().min(1, "Current password is required").max(200),
+        newPassword: z.string().min(6, "New password must be at least 6 characters").max(200),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    const found = await withDb((c) =>
+      rows<{ password_hash: string }>(c, "SELECT password_hash FROM users WHERE user_id=?", [
+        u.user_id,
+      ]),
+    );
+    if (!found[0] || !(await bcrypt.compare(data.currentPassword, found[0].password_hash))) {
+      throw new Error("Current password does not match.");
+    }
+    const newHash = await bcrypt.hash(data.newPassword, 10);
+    await withDb((c) =>
+      c.execute("UPDATE users SET password_hash=? WHERE user_id=?", [newHash, u.user_id]),
+    );
+    return { ok: true };
+  });
+
+
 // ---------- admin ----------
 export const getAdminData = createServerFn({ method: "GET" }).handler(async () => {
   await requireAdmin();
@@ -222,6 +319,222 @@ export const getAdminData = createServerFn({ method: "GET" }).handler(async () =
     ),
   }));
 });
+
+export const getAdminOverview = createServerFn({ method: "GET" }).handler(async () => {
+  await requireAdmin();
+  return withDb(async (c) => {
+    // 1. KPI stats
+    const [rev] = await rows<{ revenue: number }>(
+      c,
+      "SELECT COALESCE(SUM(total), 0) as revenue FROM orders WHERE status != 'Cancelled'",
+    );
+    const [ordCount] = await rows<{ count: number }>(
+      c,
+      "SELECT COUNT(*) as count FROM orders",
+    );
+    const [quoteCount] = await rows<{ count: number }>(
+      c,
+      "SELECT COUNT(*) as count FROM quote_requests WHERE status = 'New'",
+    );
+    const [lowStock] = await rows<{ count: number }>(
+      c,
+      "SELECT COUNT(*) as count FROM products WHERE stock <= 5",
+    );
+
+    // 2. Timeline (Last 30 days daily orders & revenue)
+    const timeline = await rows<{ date: string; count: number; total: number }>(
+      c,
+      `SELECT DATE(created_at) as date,
+              COUNT(*) as count,
+              COALESCE(SUM(CASE WHEN status != 'Cancelled' THEN total ELSE 0 END), 0) as total
+       FROM orders
+       WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+       GROUP BY DATE(created_at)
+       ORDER BY DATE(created_at) ASC`,
+    );
+
+    // 3. Category Revenue breakdown
+    const categoryRevenue = await rows<{ category: string; revenue: number; count: number }>(
+      c,
+      `SELECT c.name as category,
+              COALESCE(SUM(oi.quantity * oi.unit_price), 0) as revenue,
+              COALESCE(SUM(oi.quantity), 0) as count
+       FROM categories c
+       LEFT JOIN products p ON p.category_id = c.category_id
+       LEFT JOIN order_items oi ON oi.product_id = p.product_id
+       LEFT JOIN orders o ON o.order_id = oi.order_id AND o.status != 'Cancelled'
+       GROUP BY c.category_id, c.name
+       ORDER BY revenue DESC`,
+    );
+
+    // 4. Status distribution
+    const statusCounts = await rows<{ status: OrderStatus; count: number }>(
+      c,
+      "SELECT status, COUNT(*) as count FROM orders GROUP BY status",
+    );
+    const totalOrderCount = Number(ordCount?.count ?? 0);
+    const statusDistribution = statusCounts.map((sc) => ({
+      status: sc.status,
+      count: Number(sc.count),
+      percentage: totalOrderCount > 0 ? Math.round((Number(sc.count) / totalOrderCount) * 100) : 0,
+    }));
+
+    // 5. Attention panel items
+    const pendingOrders = await loadOrders("WHERE o.status='Pending' LIMIT 10", []);
+    const newQuotes = await rows<Quote>(
+      c,
+      `${QUOTE_SQL} WHERE status='New' ORDER BY quote_id DESC LIMIT 10`,
+    );
+    const lowStockProducts = await rows<Product>(
+      c,
+      `${PRODUCT_SQL} WHERE p.stock <= 5 ORDER BY p.stock ASC LIMIT 10`,
+    );
+
+    return {
+      kpis: {
+        totalRevenue: Number(rev?.revenue ?? 0),
+        totalOrders: Number(ordCount?.count ?? 0),
+        newQuotes: Number(quoteCount?.count ?? 0),
+        lowStockCount: Number(lowStock?.count ?? 0),
+      },
+      timeline,
+      categoryRevenue,
+      statusDistribution,
+      attention: {
+        pendingOrders,
+        newQuotes,
+        lowStockProducts,
+      },
+    };
+  });
+});
+
+export const getOrdersPage = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(1).max(100).default(10),
+        search: z.string().trim().max(100).optional(),
+        status: z.string().trim().max(50).optional(),
+        startDate: z.string().trim().max(50).optional(),
+        endDate: z.string().trim().max(50).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    const page = data.page ?? 1;
+    const pageSize = data.pageSize ?? 10;
+    const offset = (page - 1) * pageSize;
+
+    return withDb(async (c) => {
+      const whereClauses: string[] = [];
+      const queryParams: unknown[] = [];
+
+      if (data.search && data.search.trim()) {
+        const term = `%${data.search.trim()}%`;
+        whereClauses.push("(CAST(o.order_id AS CHAR) LIKE ? OR u.name LIKE ? OR o.address LIKE ?)");
+        queryParams.push(term, term, term);
+      }
+
+      if (data.status && data.status !== "all" && data.status.trim()) {
+        whereClauses.push("o.status = ?");
+        queryParams.push(data.status);
+      }
+
+      if (data.startDate && data.startDate.trim()) {
+        whereClauses.push("DATE(o.created_at) >= ?");
+        queryParams.push(data.startDate);
+      }
+
+      if (data.endDate && data.endDate.trim()) {
+        whereClauses.push("DATE(o.created_at) <= ?");
+        queryParams.push(data.endDate);
+      }
+
+      const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
+
+      // Count total matching records
+      const countResult = await rows<{ total: number }>(
+        c,
+        `SELECT COUNT(*) as total FROM orders o JOIN users u ON u.user_id=o.user_id ${whereSql}`,
+        queryParams,
+      );
+      const total = Number(countResult[0]?.total ?? 0);
+
+      // Fetch matching paginated orders
+      const ordersSql = `SELECT o.order_id,o.user_id,o.total,o.status,o.address,DATE(o.created_at) created_at,u.name customer
+        FROM orders o JOIN users u ON u.user_id=o.user_id
+        ${whereSql}
+        ORDER BY o.order_id DESC
+        LIMIT ${Number(pageSize)} OFFSET ${Number(offset)}`;
+
+      const os = await rows<Omit<Order, "items"> & { customer: string }>(c, ordersSql, queryParams);
+
+      if (!os.length) {
+        return {
+          orders: [],
+          total,
+          page,
+          pageSize,
+          totalPages: Math.ceil(total / pageSize) || 1,
+        };
+      }
+
+      const orderIds = os.map((o) => o.order_id);
+      const items = await rows<{
+        order_id: number;
+        product_id: number;
+        product_name: string;
+        quantity: number;
+        unit_price: number;
+      }>(
+        c,
+        `SELECT order_id,product_id,product_name,quantity,unit_price FROM order_items WHERE order_id IN (${orderIds.map(() => "?").join(",")})`,
+        orderIds,
+      );
+
+      const combinedOrders = os.map((o) => ({
+        ...o,
+        items: items.filter((i) => i.order_id === o.order_id),
+      }));
+
+      return {
+        orders: combinedOrders,
+        total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize) || 1,
+      };
+    });
+  });
+
+export const getCustomers = createServerFn({ method: "GET" }).handler(async () => {
+  await requireAdmin();
+  return withDb(async (c) => {
+    return rows<{
+      user_id: number;
+      name: string;
+      email: string;
+      phone: string;
+      role: "customer" | "admin";
+      orders_count: number;
+      total_spent: number;
+      created_at: string;
+    }>(
+      c,
+      `SELECT u.user_id, u.name, u.email, u.phone,
+              IF(EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='admin'),'admin','customer') as role,
+              (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.user_id) as orders_count,
+              COALESCE((SELECT SUM(total) FROM orders o WHERE o.user_id=u.user_id AND o.status != 'Cancelled'), 0) as total_spent,
+              DATE(u.created_at) as created_at
+       FROM users u
+       ORDER BY total_spent DESC, orders_count DESC`,
+    );
+  });
+});
+
 
 const productInput = z.object({
   product_id: z.number().int().min(0),

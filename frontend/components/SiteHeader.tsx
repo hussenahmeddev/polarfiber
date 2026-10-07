@@ -42,7 +42,7 @@ export function SiteHeader() {
             </Link>
           ))}
         </nav>
-        <div className="ml-auto flex shrink-0 items-center gap-1 md:ml-0">
+        <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
           <Button asChild className="reference-button hidden lg:inline-flex"><Link to="/contact">Contact</Link></Button>
           <Link to="/cart" className="relative rounded-md p-2 hover:bg-muted" aria-label="Cart">
             <ShoppingCart className="h-5 w-5" />
@@ -60,6 +60,7 @@ export function SiteHeader() {
             <span className="hidden sm:inline">{user ? user.name.split(" ")[0] : "Sign in"}</span>
           </Link>
         </div>
+
       </div>
       <nav aria-label="Mobile navigation" className="flex gap-1 overflow-x-auto border-t px-4 py-3 md:hidden">
         {items.map((n) => (

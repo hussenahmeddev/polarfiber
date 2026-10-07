@@ -60,3 +60,73 @@ export type Quote = {
 };
 
 export const etb = (n: number) => `ETB ${Number(n).toLocaleString("en-US")}`;
+
+export type CustomerDashboardStats = {
+  activeOrders: number;
+  deliveredOrders: number;
+  openQuotes: number;
+};
+
+export type CustomerDashboardData = {
+  stats: CustomerDashboardStats;
+  recentOrders: Order[];
+};
+
+export type AdminOverviewKPIs = {
+  totalRevenue: number;
+  totalOrders: number;
+  newQuotes: number;
+  lowStockCount: number;
+};
+
+export type TimelinePoint = {
+  date: string;
+  count: number;
+  total: number;
+};
+
+export type CategoryRevenuePoint = {
+  category: string;
+  revenue: number;
+  count: number;
+};
+
+export type StatusDistributionPoint = {
+  status: OrderStatus;
+  count: number;
+  percentage: number;
+};
+
+export type AdminAttentionData = {
+  pendingOrders: Order[];
+  newQuotes: Quote[];
+  lowStockProducts: Product[];
+};
+
+export type AdminOverviewData = {
+  kpis: AdminOverviewKPIs;
+  timeline: TimelinePoint[];
+  categoryRevenue: CategoryRevenuePoint[];
+  statusDistribution: StatusDistributionPoint[];
+  attention: AdminAttentionData;
+};
+
+export type PaginatedOrders = {
+  orders: Order[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+export type CustomerSummary = {
+  user_id: number;
+  name: string;
+  email: string;
+  phone: string;
+  role: Role;
+  orders_count: number;
+  total_spent: number;
+  created_at: string;
+};
+
