@@ -207,6 +207,18 @@
 .reference-gallery a { display: block; overflow: hidden; background: var(--secondary); }
 .reference-gallery img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; transition: transform 0.3s; }
 .reference-gallery a:hover img { transform: scale(1.035); }
+.reference-services-section { background: var(--background); }
+.reference-services-section .reference-section { padding-top: 64px; padding-bottom: 64px; }
+.reference-services-heading { text-align: center; max-width: 720px; margin: 0 auto 48px; }
+.reference-services-heading h2 { font-size: 32px; line-height: 1.35; font-weight: 700; text-transform: none; margin-bottom: 16px; }
+.reference-services-heading .reference-body { font-size: 16px; line-height: 1.75; color: var(--muted-foreground); }
+.reference-services-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+.reference-service-card { background: var(--card); border: 1px solid var(--border); padding: 32px 24px; transition: box-shadow 0.3s, border-color 0.3s; }
+.reference-service-card:hover { box-shadow: var(--shadow-soft); border-color: var(--primary); }
+.reference-service-icon { width: 48px; height: 48px; background: oklch(0.53 0.24 260 / 0.1); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 20px; }
+.reference-service-icon svg { color: var(--primary); width: 24px; height: 24px; }
+.reference-service-card h3 { font-size: 18px; line-height: 1.4; font-weight: 700; margin-bottom: 12px; text-transform: none; }
+.reference-service-card .reference-body { font-size: 15px; line-height: 1.7; }
 .reference-quality { background: var(--secondary); }
 .reference-quality .reference-section { padding-top: 64px; padding-bottom: 64px; }
 .reference-quality-heading { text-align: center; max-width: 640px; margin: auto; }
@@ -219,12 +231,21 @@
 .reference-cta h2 { font-size: 24px; font-weight: 700; line-height: 1.4; }
 .reference-cta p { font-size: 16px; line-height: 1.8; margin-top: 12px; max-width: 550px; }
 .reference-footer { background: var(--secondary); color: var(--foreground); }
+.faq-list { background: var(--card); }
+.faq-item { border-color: var(--border); }
+.faq-trigger { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; text-align: left; font-size: 16px; font-weight: 600; line-height: 1.5; transition: background-color 0.2s; }
+.faq-trigger:hover { background: var(--muted); }
+.faq-chevron { width: 20px; height: 20px; flex-shrink: 0; color: var(--muted-foreground); transition: transform 0.2s, color 0.2s; }
+.faq-trigger:hover .faq-chevron { color: var(--primary); }
+.faq-answer { padding: 0 24px 20px; line-height: 1.75; animation: fadeIn 0.2s; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 900px) {
  .reference-header-inner { gap: 12px; padding: 0 20px; }
  .reference-nav { gap: 18px; }
  .reference-hero-inner { gap: 36px; }
  .home-quote { padding: 28px; }
  .reference-about { gap: 32px; }
+ .reference-services-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 767px) {
  .reference-header-inner { min-height: 72px; }
@@ -243,6 +264,7 @@
  .reference-gallery-heading { align-items: flex-start; }
  .reference-gallery-heading a { flex-shrink: 0; }
  .reference-features { grid-template-columns: 1fr; gap: 32px; }
+ .reference-services-grid { grid-template-columns: 1fr; gap: 16px; }
  .reference-cta-inner { flex-direction: column; align-items: flex-start; padding: 42px 20px; gap: 24px; }
 }
 @media (prefers-reduced-motion: reduce) { .reference-gallery img { transition: none; } }

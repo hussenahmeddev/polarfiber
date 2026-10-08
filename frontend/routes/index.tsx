@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ShieldCheck, Sun, Lock, Phone, ArrowRight } from "lucide-react";
+import { ShieldCheck, Sun, Lock, Phone, ArrowRight, Wrench, Truck, ShieldCheck as WarrantyIcon, Box, Settings, PhoneCall } from "lucide-react";
 import { Button } from "@/frontend/components/ui/button";
 import { QuoteForm } from "@/frontend/components/QuoteForm";
 
@@ -16,6 +16,15 @@ export const Route = createFileRoute("/")({
   }),
   component: Home,
 });
+
+const services = [
+  { icon: Wrench,      title: "Installation Support",   text: "Professional guidance and support for proper installation of your water storage tanks, ensuring optimal performance and longevity." },
+  { icon: Truck,       title: "Delivery Services",      text: "We coordinate delivery of your products to your location. Contact us to discuss delivery options for your area." },
+  { icon: WarrantyIcon,title: "Warranty Service",       text: "Our water tank products come with a 10-year warranty. We stand behind the quality and durability of our products." },
+  { icon: Box,         title: "Custom Manufacturing",   text: "Need a specific size or configuration? We can discuss custom manufacturing options for specialized requirements." },
+  { icon: Settings,    title: "Maintenance Guidance",   text: "We provide maintenance information and support to help you keep your water storage system in optimal condition." },
+  { icon: PhoneCall,   title: "Customer Support",       text: "Our team is available to answer your questions, help you choose the right product, and provide after-sales assistance." },
+];
 
 const features = [
   { icon: ShieldCheck, title: "100% Food-Grade Material", text: "UV-stabilized, non-toxic LLDPE plastic. BPA-free and safe for drinking water storage." },
@@ -66,6 +75,23 @@ function Home() {
         </div>
         <div className="reference-gallery">
           {photos.map(photo => <Link to="/products" key={photo.src} aria-label={`Browse products: ${photo.alt}`}><img src={photo.src} alt={photo.alt} loading="lazy" /></Link>)}
+        </div>
+      </section>
+      <section className="reference-services-section">
+        <div className="reference-section">
+          <div className="reference-services-heading">
+            <h2>Our Services</h2>
+            <p className="reference-body">Beyond manufacturing quality products, Polar Fiber provides comprehensive support services to ensure you get the most from your water storage solutions.</p>
+          </div>
+          <div className="reference-services-grid">
+            {services.map(s => (
+              <article key={s.title} className="reference-service-card">
+                <div className="reference-service-icon"><s.icon aria-hidden="true" /></div>
+                <h3>{s.title}</h3>
+                <p className="reference-body">{s.text}</p>
+              </article>
+            ))}
+          </div>
         </div>
       </section>
       <section className="reference-quality">

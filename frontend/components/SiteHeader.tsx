@@ -8,6 +8,7 @@ const nav = [
   { to: "/", label: "Home" },
   { to: "/products", label: "Products" },
   { to: "/about", label: "About" },
+  { to: "/faq", label: "FAQ" },
   { to: "/contact", label: "Contact" },
   { to: "/quote", label: "Get a Quote" },
 ] as const;
@@ -168,6 +169,7 @@ export function SiteFooter() {
           <ul className="mt-2 space-y-1.5">
             <li><Link to="/products">Products</Link></li>
             <li><Link to="/about">About</Link></li>
+            <li><Link to="/faq">FAQ</Link></li>
             <li><Link to="/contact">Contact</Link></li>
             <li><Link to="/quote">Request a quote</Link></li>
           </ul>

@@ -623,3 +623,22 @@ export const setQuoteStatus = createServerFn({ method: "POST" })
     );
     return { ok: true };
   });
+
+export const updateProductStock = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z.object({
+      id: z.number().int(),
+      stock: z.number().int().min(0),
+    }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    await withDb((c) =>
+      c.execute("UPDATE products SET stock=? WHERE product_id=?", [
+        data.stock,
+        data.id,
+      ]),
+    );
+    return { ok: true };
+  });
+
