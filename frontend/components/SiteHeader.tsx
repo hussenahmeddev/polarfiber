@@ -52,13 +52,17 @@ export function SiteHeader() {
               </span>
             )}
           </Link>
-          <Link
-            to={user ? "/account" : "/login"}
-            className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium hover:bg-muted"
-          >
-            <User className="h-4 w-4" />
-            <span className="hidden sm:inline">{user ? user.name.split(" ")[0] : "Sign in"}</span>
-          </Link>
+          {user ? (
+            <UserMenu />
+          ) : (
+            <Link
+              to="/login"
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium hover:bg-muted"
+            >
+              <User className="h-4 w-4" />
+              <span className="hidden sm:inline">Sign in</span>
+            </Link>
+          )}
         </div>
 
       </div>
