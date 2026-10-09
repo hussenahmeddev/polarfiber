@@ -18,14 +18,18 @@ export function startSession(userId: number) {
   setCookie(COOKIE, `${payload}.${sign(payload)}`, {
     httpOnly: true,
     secure: true,
-    sameSite: "lax",
+    // "none" + partitioned lets the cookie work when the site is shown inside
+    // an embedded frame (such as the editor preview). Cross-site requests are
+    // still blocked by the CSRF middleware in start.ts.
+    sameSite: "none",
+    partitioned: true,
     path: "/",
     maxAge: MAX_AGE,
   });
 }
 
 export function endSession() {
-  deleteCookie(COOKIE, { path: "/" });
+  deleteCookie(COOKIE, { path: "/", secure: true, sameSite: "none", partitioned: true });
 }
 
 export function sessionUserId(): number | null {
