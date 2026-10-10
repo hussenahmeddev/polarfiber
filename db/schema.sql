@@ -107,9 +107,11 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   quantity INT NOT NULL,
   type ENUM('in', 'out') NOT NULL,
   reference_type VARCHAR(50) NOT NULL,
-  reference_id INT NOT NULL,
+  reference_id VARCHAR(50) NOT NULL,
+  note VARCHAR(255) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
+  FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE,
+  INDEX idx_stock_movements_product (product_id)
 );
 
 CREATE TABLE IF NOT EXISTS notifications (

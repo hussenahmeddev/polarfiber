@@ -10,6 +10,7 @@ import { CATEGORIES, ORDER_STATUSES, QUOTE_STATUSES } from "../shared/data";
 import { getPermissionsForRole } from "../shared/permissions";
 import { notify } from "../utils/notify";
 import { logAction } from "../utils/audit";
+import { changeStock } from "../utils/stock";
 
 const PRODUCT_SQL = `SELECT p.product_id,p.name,c.name category,p.capacity,p.price,p.stock,p.image,p.description
   FROM products p JOIN categories c ON c.category_id=p.category_id`;
@@ -371,7 +372,8 @@ export const placeOrder = createServerFn({ method: "POST" })
 
       await c.beginTransaction();
       try {
-        // Prices and stock always come from the database using SELECT ... FOR UPDATE
+        // Prices always come from the database using SELECT ... FOR UPDATE
+        // Stock sufficiency is verified inside changeStock() under its own lock.
         const ps = await rows<{ product_id: number; name: string; price: number; stock: number }>(
           c,
           `SELECT product_id, name, price, stock FROM products WHERE product_id IN (${ids.map(() => "?").join(",")}) ORDER BY product_id FOR UPDATE`,
@@ -385,13 +387,6 @@ export const placeOrder = createServerFn({ method: "POST" })
 
         if (lines.length !== data.items.length) {
           throw new Error("One or more selected products are no longer available.");
-        }
-
-        // Verify stock for each item before deducting (stock never goes negative)
-        for (const l of lines) {
-          if (l.p.stock < l.quantity) {
-            throw new Error(`Insufficient stock for "${l.p.name}". Only ${l.p.stock} available.`);
-          }
         }
 
         const total = lines.reduce((t, l) => t + l.p.price * l.quantity, 0);
@@ -409,16 +404,15 @@ export const placeOrder = createServerFn({ method: "POST" })
             [oid, l.product_id, l.p.name, l.quantity, l.p.price],
           );
 
-          // Deduct stock safely inside transaction
-          await c.execute(
-            "UPDATE products SET stock = stock - ? WHERE product_id = ? AND stock >= ?",
-            [l.quantity, l.product_id, l.quantity],
-          );
-
-          // Record stock movement (type 'out' for order)
-          await c.execute(
-            "INSERT INTO stock_movements (product_id, quantity, type, reference_type, reference_id) VALUES (?, ?, 'out', 'order', ?)",
-            [l.product_id, l.quantity, oid],
+          // Deduct stock via shared helper (locks row, blocks negative, records movement)
+          await changeStock(
+            c,
+            l.product_id,
+            -l.quantity,
+            `Order #${oid} placed`,
+            "order",
+            oid,
+            u.user_id,
           );
         }
 
@@ -990,6 +984,21 @@ export const saveProduct = createServerFn({ method: "POST" })
           "UPDATE products SET category_id=?,name=?,capacity=?,price=?,stock=?,image=?,description=? WHERE product_id=?",
           [...v, data.product_id],
         );
+        // Option A: write a stock_movements record when admin edits the stock field directly
+        const stockDiff = data.stock - Number(oldProduct.stock);
+        if (stockDiff !== 0) {
+          await c.execute(
+            `INSERT INTO stock_movements (product_id, quantity, type, reference_type, reference_id, note)
+             VALUES (?, ?, ?, 'admin_edit', ?, ?)`,
+            [
+              data.product_id,
+              Math.abs(stockDiff),
+              stockDiff > 0 ? "in" : "out",
+              u.user_id,
+              `Admin product edit by ${u.name}`,
+            ],
+          );
+        }
         await logAction(null, "UPDATE_PRODUCT", "product", data.product_id, oldProduct, {
           ...data,
           price: effectivePrice,
@@ -1088,8 +1097,10 @@ export const setOrderStatus = createServerFn({ method: "POST" })
           }
         }
 
-        // Stock restored when order is cancelled from any status before 'delivered'
-        // Do NOT deduct again on 'confirmed'.
+        // Restore stock when order is cancelled from any status before 'Delivered'.
+        // changeStock() locks each product row with FOR UPDATE before updating,
+        // which closes the race condition in the old bare UPDATE … SET stock + ?.
+        // Do NOT deduct again on 'Confirmed'.
         if (newStatus === "Cancelled" && prevStatus !== "Cancelled" && prevStatus !== "Delivered") {
           const items = await rows<{ product_id: number; quantity: number }>(
             c,
@@ -1098,13 +1109,14 @@ export const setOrderStatus = createServerFn({ method: "POST" })
           );
           for (const item of items) {
             if (item.product_id) {
-              await c.execute("UPDATE products SET stock = stock + ? WHERE product_id = ?", [
-                item.quantity,
+              await changeStock(
+                c,
                 item.product_id,
-              ]);
-              await c.execute(
-                "INSERT INTO stock_movements (product_id, quantity, type, reference_type, reference_id) VALUES (?, ?, 'in', 'order', ?)",
-                [item.product_id, item.quantity, data.id],
+                +item.quantity,
+                `Order #${data.id} cancelled — stock restored`,
+                "order",
+                data.id,
+                u.user_id,
               );
             }
           }
@@ -1338,6 +1350,8 @@ export const updateProductStock = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const u = await requirePermission("inventory.adjust");
     return withDb(async (c) => {
+      // Fast pre-read (no lock) just to compute diff and run the staff limit check.
+      // changeStock() will re-read under FOR UPDATE before any mutation.
       const oldRows = await rows<{ stock: number; name: string }>(
         c,
         "SELECT stock, name FROM products WHERE product_id=?",
@@ -1347,7 +1361,6 @@ export const updateProductStock = createServerFn({ method: "POST" })
       const oldStock = oldRows[0].stock;
       const targetStock = data.stock !== undefined ? data.stock : oldStock + (data.delta ?? 0);
       if (targetStock < 0) throw new Error("Stock cannot be negative.");
-
       const diff = targetStock - oldStock;
       const absQty = Math.abs(diff);
 
@@ -1359,7 +1372,7 @@ export const updateProductStock = createServerFn({ method: "POST" })
       const stockLimit = Number(limitRow?.setting_value ?? 50);
 
       if (u.role === "staff" && absQty > stockLimit) {
-        // Exceeds limit -> requires admin approval
+        // Exceeds limit → queue for admin approval, do not touch stock yet
         const [ins] = await c.execute(
           "INSERT INTO stock_adjustments (product_id, quantity, reason, status, staff_id) VALUES (?, ?, ?, 'pending_approval', ?)",
           [data.id, diff, data.reason, u.user_id],
@@ -1379,22 +1392,36 @@ export const updateProductStock = createServerFn({ method: "POST" })
         };
       }
 
-      await c.execute("UPDATE products SET stock=? WHERE product_id=?", [targetStock, data.id]);
-      if (diff !== 0) {
-        await c.execute(
-          "INSERT INTO stock_movements (product_id, quantity, type, reference_type, reference_id) VALUES (?, ?, ?, 'manual', ?)",
-          [data.id, absQty, diff > 0 ? "in" : "out", u.user_id],
-        );
+      if (diff === 0) {
+        return { ok: true, stock: oldStock };
       }
-      await logAction(
-        null,
-        "UPDATE_PRODUCT_STOCK",
-        "product",
-        data.id,
-        { stock: oldStock },
-        { stock: targetStock, reason: data.reason },
-      );
-      return { ok: true, stock: targetStock };
+
+      // changeStock() runs inside a transaction with a FOR UPDATE lock
+      await c.beginTransaction();
+      try {
+        const newStock = await changeStock(
+          c,
+          data.id,
+          diff,
+          data.reason,
+          "manual",
+          u.user_id,
+          u.user_id,
+        );
+        await c.commit();
+        await logAction(
+          null,
+          "UPDATE_PRODUCT_STOCK",
+          "product",
+          data.id,
+          { stock: oldStock },
+          { stock: newStock, reason: data.reason },
+        );
+        return { ok: true, stock: newStock };
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
     });
   });
 
@@ -1432,16 +1459,21 @@ export const approveStockAdjustment = createServerFn({ method: "POST" })
         ]);
         if (!prod) throw new Error("Product not found.");
 
-        const newStock = Math.max(0, prod.stock + adj.quantity);
-        await c.execute("UPDATE products SET stock=? WHERE product_id=?", [newStock, adj.product_id]);
+        // changeStock() re-locks under FOR UPDATE and throws if the result
+        // would go negative — no silent Math.max(0, …) floor.
+        await changeStock(
+          c,
+          adj.product_id,
+          adj.quantity,          // signed: positive = restock, negative = write-down
+          `Stock adjustment #${data.id} approved`,
+          "manual",
+          data.id,
+          admin.user_id,
+        );
         await c.execute("UPDATE stock_adjustments SET status='approved', reviewed_by=?, reviewed_at=NOW() WHERE id=?", [
           admin.user_id,
           data.id,
         ]);
-        await c.execute(
-          "INSERT INTO stock_movements (product_id, quantity, type, reference_type, reference_id) VALUES (?, ?, ?, 'manual', ?)",
-          [adj.product_id, Math.abs(adj.quantity), adj.quantity > 0 ? "in" : "out", admin.user_id],
-        );
         await c.commit();
 
         await notify(
