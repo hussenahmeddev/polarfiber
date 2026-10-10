@@ -1,6 +1,7 @@
 // One-off: create tables and seed sample products. Run: node db/setup.mjs
 import mysql from "mysql2/promise";
 import fs from "node:fs";
+import bcrypt from "bcryptjs";
 
 try {
   process.loadEnvFile?.();
@@ -46,6 +47,30 @@ if (!colNames.has("locked_until")) {
 try {
   await c.query("ALTER TABLE user_roles MODIFY COLUMN role ENUM('customer','admin','staff') NOT NULL");
 } catch {}
+
+// Ensure a staff account exists for operational staff access
+const [staffUsers] = await c.query(
+  "SELECT u.user_id FROM users u JOIN user_roles r ON u.user_id = r.user_id WHERE r.role = 'staff' LIMIT 1",
+);
+if (staffUsers.length === 0) {
+  const [existingUser] = await c.query("SELECT user_id FROM users WHERE email = 'staff@polarfiber.com'");
+  let staffId;
+  if (existingUser.length > 0) {
+    staffId = existingUser[0].user_id;
+  } else {
+    const hash = await bcrypt.hash("password123", 10);
+    const [res] = await c.execute(
+      "INSERT INTO users (name, email, phone, password_hash, is_active) VALUES (?, ?, ?, ?, 1)",
+      ["Polar Staff", "staff@polarfiber.com", "+251911000000", hash],
+    );
+    staffId = res.insertId;
+  }
+  await c.execute(
+    "INSERT INTO user_roles (user_id, role) VALUES (?, 'staff') ON DUPLICATE KEY UPDATE role='staff'",
+    [staffId],
+  );
+  console.log(`Seeded staff user: staff@polarfiber.com (user_id: ${staffId})`);
+}
 
 const [[{ n }]] = await c.query("SELECT COUNT(*) n FROM products");
 if (n === 0) {

@@ -112,7 +112,7 @@ function Login() {
       }
       await refreshUser();
       toast.success(`Welcome back, ${r.user.name}`);
-      nav({ to: r.user.role === "admin" ? "/admin" : "/account" });
+      nav({ to: r.user.role === "admin" || r.user.role === "staff" ? "/admin" : "/account" });
     } finally {
       setBusy(false);
     }
@@ -139,7 +139,7 @@ function Login() {
       }
       await refreshUser();
       toast.success("Account created");
-      nav({ to: r.user.role === "admin" ? "/admin" : "/account" });
+      nav({ to: r.user.role === "admin" || r.user.role === "staff" ? "/admin" : "/account" });
     } finally {
       setBusy(false);
     }

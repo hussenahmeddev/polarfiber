@@ -4,7 +4,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
 import { withDb, rows } from "./db.server";
-import { currentUser, endSession, loadUser, requireAdmin, requireUser, startSession, issueTokenPair, revokeRefreshToken, rotateRefreshToken } from "./session.server";
+import { currentUser, endSession, loadUser, requireAdmin, requireStaffOrAdmin, requireUser, startSession, issueTokenPair, revokeRefreshToken, rotateRefreshToken } from "./session.server";
 import type { Category, Order, OrderStatus, Product, Quote, QuoteStatus } from "../shared/data";
 import { CATEGORIES, ORDER_STATUSES, QUOTE_STATUSES } from "../shared/data";
 import { notify } from "../utils/notify";
@@ -545,9 +545,9 @@ export const changeMyPassword = createServerFn({ method: "POST" })
   });
 
 
-// ---------- admin ----------
+// ---------- admin & staff ----------
 export const getAdminData = createServerFn({ method: "GET" }).handler(async () => {
-  await requireAdmin();
+  await requireStaffOrAdmin();
   const orders = await loadOrders("", []);
   return withDb(async (c) => ({
     orders,
@@ -575,7 +575,7 @@ export const getAdminData = createServerFn({ method: "GET" }).handler(async () =
 });
 
 export const getAdminOverview = createServerFn({ method: "GET" }).handler(async () => {
-  await requireAdmin();
+  await requireStaffOrAdmin();
   return withDb(async (c) => {
     // 1. KPI stats
     const [rev] = await rows<{ revenue: number }>(
@@ -677,7 +677,7 @@ export const getOrdersPage = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    await requireAdmin();
+    await requireStaffOrAdmin();
     const page = data.page ?? 1;
     const pageSize = data.pageSize ?? 10;
     const offset = (page - 1) * pageSize;
@@ -765,7 +765,7 @@ export const getOrdersPage = createServerFn({ method: "POST" })
   });
 
 export const getCustomers = createServerFn({ method: "GET" }).handler(async () => {
-  await requireAdmin();
+  await requireStaffOrAdmin();
   return withDb(async (c) => {
     return rows<{
       user_id: number;
@@ -808,7 +808,7 @@ const productInput = z.object({
 export const saveProduct = createServerFn({ method: "POST" })
   .validator((d) => productInput.parse(d))
   .handler(async ({ data }) => {
-    await requireAdmin();
+    await requireStaffOrAdmin();
     let productId = data.product_id;
     await withDb(async (c) => {
       const cat = (
@@ -853,7 +853,7 @@ export const saveProduct = createServerFn({ method: "POST" })
 export const deleteProduct = createServerFn({ method: "POST" })
   .validator((d) => z.object({ id: z.number().int() }).parse(d))
   .handler(async ({ data }) => {
-    await requireAdmin();
+    await requireStaffOrAdmin();
     await withDb(async (c) => {
       const oldRows = await rows<Product>(c, `${PRODUCT_SQL} WHERE p.product_id=?`, [data.id]);
       const oldProduct = oldRows[0] ?? null;
@@ -873,7 +873,7 @@ export const setOrderStatus = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    await requireAdmin();
+    await requireStaffOrAdmin();
     await withDb(async (c) => {
       await c.beginTransaction();
       try {
@@ -943,7 +943,7 @@ export const setQuoteStatus = createServerFn({ method: "POST" })
     z.object({ id: z.number().int(), status: z.enum(QUOTE_STATUSES) }).parse(d),
   )
   .handler(async ({ data }) => {
-    await requireAdmin();
+    await requireStaffOrAdmin();
     await withDb(async (c) => {
       const [existing] = await rows<{
         quote_id: number;
@@ -999,7 +999,7 @@ export const updateProductStock = createServerFn({ method: "POST" })
     }).parse(d),
   )
   .handler(async ({ data }) => {
-    await requireAdmin();
+    await requireStaffOrAdmin();
     await withDb(async (c) => {
       const oldRows = await rows<{ stock: number }>(c, "SELECT stock FROM products WHERE product_id=?", [data.id]);
       const oldStock = oldRows[0]?.stock ?? 0;
@@ -1033,7 +1033,7 @@ export const getMyNotifications = createServerFn({ method: "GET" }).handler(asyn
 });
 
 export const getAuditLogs = createServerFn({ method: "GET" }).handler(async () => {
-  await requireAdmin();
+  await requireStaffOrAdmin();
   return withDb((c) =>
     rows<{
       id: number;
@@ -1062,7 +1062,7 @@ export const replyContactMessage = createServerFn({ method: "POST" })
     }).parse(d),
   )
   .handler(async ({ data }) => {
-    await requireAdmin();
+    await requireStaffOrAdmin();
     await withDb(async (c) => {
       const [u] = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
         data.email.toLowerCase(),
@@ -1094,7 +1094,7 @@ export const replySupportTicket = createServerFn({ method: "POST" })
     }).parse(d),
   )
   .handler(async ({ data }) => {
-    await requireAdmin();
+    await requireStaffOrAdmin();
     await withDb(async (c) => {
       let targetUserId = data.user_id;
       if (!targetUserId && data.customer_email) {
@@ -1117,5 +1117,71 @@ export const replySupportTicket = createServerFn({ method: "POST" })
       });
     });
     return { ok: true };
+  });
+
+export const updateUserRole = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z.object({
+      userId: z.number().int().positive(),
+      role: z.enum(["customer", "admin", "staff"]),
+    }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    return withDb(async (c) => {
+      if (data.role !== "admin") {
+        const [adminCount] = await rows<{ count: number }>(
+          c,
+          "SELECT COUNT(*) as count FROM user_roles WHERE role='admin'",
+        );
+        const [isTargetAdmin] = await rows<{ user_id: number }>(
+          c,
+          "SELECT user_id FROM user_roles WHERE user_id=? AND role='admin'",
+          [data.userId],
+        );
+        if (isTargetAdmin && (adminCount?.count ?? 0) <= 1) {
+          throw new Error("Cannot demote the last remaining administrator.");
+        }
+      }
+
+      const [targetUser] = await rows<{ user_id: number; name: string }>(
+        c,
+        "SELECT user_id, name FROM users WHERE user_id=?",
+        [data.userId],
+      );
+      if (!targetUser) throw new Error("User not found.");
+
+      const [currentRole] = await rows<{ role: string }>(
+        c,
+        "SELECT role FROM user_roles WHERE user_id=?",
+        [data.userId],
+      );
+      const oldRole = currentRole?.role ?? "customer";
+
+      await c.execute("DELETE FROM user_roles WHERE user_id=?", [data.userId]);
+      await c.execute("INSERT INTO user_roles (user_id, role) VALUES (?, ?)", [
+        data.userId,
+        data.role,
+      ]);
+
+      await notify(
+        data.userId,
+        "role_change",
+        "Account Role Updated",
+        `Your Polar Fiber account role has been changed to "${data.role}".`,
+        data.role === "customer" ? "/account" : "/admin",
+      );
+
+      await logAction(
+        null,
+        "UPDATE_USER_ROLE",
+        "user",
+        data.userId,
+        { role: oldRole },
+        { role: data.role },
+      );
+
+      return { ok: true, user_id: data.userId, role: data.role };
+    });
   });
 

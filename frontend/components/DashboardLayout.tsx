@@ -184,8 +184,8 @@ export function DashboardLayout({
 
           {/* Sidebar Footer Controls */}
           <div className="mt-8 space-y-2 border-t border-border pt-4">
-            {/* Switch to customer/admin shortcut if user is admin */}
-            {user?.role === "admin" && (
+            {/* Switch to customer/admin shortcut if user is admin or staff */}
+            {(user?.role === "admin" || user?.role === "staff") && (
               <Button
                 asChild
                 variant="ghost"

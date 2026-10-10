@@ -104,6 +104,7 @@ function UserMenu() {
   }, [open]);
   if (!user) return null;
   const isAdmin = user.role === "admin";
+  const isStaff = user.role === "staff";
   const item = "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-muted";
   return (
     <div className="relative" ref={ref}>
@@ -125,9 +126,9 @@ function UserMenu() {
             <p className="truncate text-sm font-semibold">{user.name}</p>
             <p className="truncate text-xs text-muted-foreground">{user.email}</p>
           </div>
-          {isAdmin && (
+          {(isAdmin || isStaff) && (
             <Link to="/admin" role="menuitem" className={item} onClick={() => setOpen(false)}>
-              <ShieldCheck className="h-4 w-4" /> Admin dashboard
+              <ShieldCheck className="h-4 w-4" /> {isAdmin ? "Admin dashboard" : "Staff portal"}
             </Link>
           )}
           <Link to="/account" role="menuitem" className={item} onClick={() => setOpen(false)}>

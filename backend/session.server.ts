@@ -221,3 +221,11 @@ export async function requireAdmin(): Promise<SessionUser> {
   if (u.role !== "admin") throw new Error("Admins only.");
   return u;
 }
+
+export async function requireStaffOrAdmin(): Promise<SessionUser> {
+  const u = await requireUser();
+  if (u.role !== "admin" && u.role !== "staff") {
+    throw new Error("Staff or administrator access required.");
+  }
+  return u;
+}

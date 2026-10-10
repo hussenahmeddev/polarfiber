@@ -95,6 +95,7 @@ import {
   replyContactMessage,
   replySupportTicket,
   getAuditLogs,
+  updateUserRole,
 } from "@/backend/api.functions";
 
 const PIE_COLORS = ["#0ea5e9", "#6366f1", "#10b981", "#f59e0b", "#f43f5e"];
@@ -324,18 +325,21 @@ export function AdminDashboard() {
   const mutateReplyMessage = useServerFn(replyContactMessage);
   const mutateReplyTicket = useServerFn(replySupportTicket);
   const fetchAuditLogs = useServerFn(getAuditLogs);
+  const mutateUserRole = useServerFn(updateUserRole);
+
+  const isStaffOrAdmin = user?.role === "admin" || user?.role === "staff";
 
   // Queries
   const auditLogsQuery = useQuery({
     queryKey: ["admin", "audit-logs"],
     queryFn: () => fetchAuditLogs(),
-    enabled: user?.role === "admin" && activeTab === "audit-logs",
+    enabled: isStaffOrAdmin && activeTab === "audit-logs",
   });
 
   const overviewQuery = useQuery({
     queryKey: ["admin", "overview"],
     queryFn: () => fetchOverview(),
-    enabled: user?.role === "admin",
+    enabled: isStaffOrAdmin,
   });
 
   const ordersQuery = useQuery({
@@ -349,40 +353,40 @@ export function AdminDashboard() {
           status: ordersStatus,
         },
       }),
-    enabled: user?.role === "admin",
+    enabled: isStaffOrAdmin,
   });
 
   const productsQuery = useQuery({
     queryKey: ["admin", "products"],
     queryFn: () => fetchCatalog(),
-    enabled: user?.role === "admin",
+    enabled: isStaffOrAdmin,
   });
 
   const adminDataQuery = useQuery({
     queryKey: ["admin", "data"],
     queryFn: () => fetchQuotesList(),
-    enabled: user?.role === "admin",
+    enabled: isStaffOrAdmin,
   });
 
   const customersQuery = useQuery({
     queryKey: ["admin", "customers"],
     queryFn: () => fetchCustomerList(),
-    enabled: user?.role === "admin",
+    enabled: isStaffOrAdmin,
   });
 
-  // Non-admin guard
-  if (!user || user.role !== "admin") {
+  // Non-staff/admin guard
+  if (!user || !isStaffOrAdmin) {
     return (
       <div className="mx-auto max-w-md px-4 py-24 text-center">
         <div className="flex h-14 w-14 mx-auto items-center justify-center rounded-2xl bg-destructive/10 text-destructive shadow-xs">
           <AlertTriangle className="h-7 w-7" />
         </div>
-        <h1 className="mt-4 text-2xl font-bold text-foreground">Administrator Access Required</h1>
+        <h1 className="mt-4 text-2xl font-bold text-foreground">Management Access Required</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          You must be logged in with an administrator account to access this management dashboard.
+          You must be logged in with a staff or administrator account to access this management dashboard.
         </p>
         <Button asChild className="mt-6 w-full bg-primary hover:bg-primary/90 text-primary-foreground">
-          <Link to="/login">Sign In with Admin Account</Link>
+          <Link to="/login">Sign In with Staff or Admin Account</Link>
         </Button>
       </div>
     );
@@ -1557,15 +1561,46 @@ export function AdminDashboard() {
                         <td className="px-5 py-4 text-muted-foreground">{c.email}</td>
                         <td className="px-5 py-4 text-muted-foreground">{c.phone || "—"}</td>
                         <td className="px-5 py-4">
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
-                              c.role === "admin"
-                                ? "bg-primary/15 text-primary"
-                                : "bg-muted text-muted-foreground"
-                            }`}
-                          >
-                            {c.role}
-                          </span>
+                          {user?.role === "admin" ? (
+                            <select
+                              value={c.role}
+                              onChange={async (e) => {
+                                const newRole = e.target.value as "customer" | "admin" | "staff";
+                                try {
+                                  await mutateUserRole({
+                                    data: { userId: c.user_id, role: newRole },
+                                  });
+                                  toast.success(`Updated ${c.name}'s role to ${newRole}`);
+                                  customersQuery.refetch();
+                                } catch (err) {
+                                  toast.error(err instanceof Error ? err.message : "Failed to update role");
+                                }
+                              }}
+                              className={`rounded-lg px-2.5 py-1 text-xs font-semibold capitalize border border-border bg-card cursor-pointer focus:ring-1 focus:ring-primary ${
+                                c.role === "admin"
+                                  ? "text-primary border-primary/30"
+                                  : c.role === "staff"
+                                    ? "text-amber-600 border-amber-500/30 dark:text-amber-400"
+                                    : "text-muted-foreground"
+                              }`}
+                            >
+                              <option value="customer">Customer</option>
+                              <option value="staff">Staff</option>
+                              <option value="admin">Admin</option>
+                            </select>
+                          ) : (
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
+                                c.role === "admin"
+                                  ? "bg-primary/15 text-primary"
+                                  : c.role === "staff"
+                                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                                    : "bg-muted text-muted-foreground"
+                              }`}
+                            >
+                              {c.role}
+                            </span>
+                          )}
                         </td>
                         <td className="px-5 py-4 font-semibold text-foreground">{c.orders_count}</td>
                         <td className="px-5 py-4 font-bold text-primary">{etb(c.total_spent)}</td>
