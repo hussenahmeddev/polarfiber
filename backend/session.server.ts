@@ -61,7 +61,15 @@ function jwtSecret(): string {
     process.env["JWT_SECRET"] ||
     process.env["SESSION_SECRET"] ||
     "polarfiber-dev-secret-key-change-in-production";
-  return process.env["JWT_SECRET"] ? s : s + "-jwt";
+  const secret = process.env["JWT_SECRET"] ? s : s + "-jwt";
+  // Enforce minimum length at runtime — fail loudly rather than use a weak secret.
+  if (secret.length < 32) {
+    throw new Error(
+      "JWT_SECRET / SESSION_SECRET must be at least 32 characters. " +
+      "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+    );
+  }
+  return secret;
 }
 
 function b64url(s: string): string {
@@ -240,25 +248,20 @@ export async function loadUser(uid: number): Promise<SessionUser | null> {
 }
 
 export async function currentUser(): Promise<SessionUser | null> {
-  // Try JWT first
+  // JWT is the only valid auth path. The legacy HMAC pf_session cookie is no
+  // longer accepted — it was a second auth channel that allowed users to remain
+  // signed in even after JWT logout.
   const jwt = verifyAccessToken();
   if (jwt) return loadUser(jwt.uid);
-  // Fall back to HMAC session
-  const uid = sessionUserId();
-  if (!uid) return null;
-  return loadUser(uid);
+  return null;
 }
 
 // ─── Auth guards ───────────────────────────────────────────────────────────────
 export async function requireAuth(): Promise<{ uid: number; role: Role }> {
+  // JWT only — HMAC session fallback removed.
   const jwt = verifyAccessToken();
   if (jwt) {
     const u = await loadUser(jwt.uid);
-    if (u) return { uid: u.user_id, role: u.role };
-  }
-  const uid = sessionUserId();
-  if (uid) {
-    const u = await loadUser(uid);
     if (u) return { uid: u.user_id, role: u.role };
   }
   throw Object.assign(new Error("Unauthorized"), { status: 401 });
@@ -281,6 +284,15 @@ export async function requireRole(
 export async function requireUser(): Promise<SessionUser> {
   const u = await currentUser();
   if (!u) throw new Error("Please sign in first.");
+  // Server-side enforcement: a user with must_change_password=true may only call
+  // changeTemporaryPassword. Every other protected function rejects them here.
+  // The MustChangePasswordModal in the UI is UX sugar; this is the real gate.
+  if (u.must_change_password) {
+    throw Object.assign(
+      new Error("You must change your temporary password before continuing."),
+      { status: 403 },
+    );
+  }
   return u;
 }
 

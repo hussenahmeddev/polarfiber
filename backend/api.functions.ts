@@ -4,7 +4,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
 import { withDb, rows } from "./db.server";
-import { currentUser, endSession, loadUser, requireAdmin, requireStaffOrAdmin, requirePermission, requireUser, startSession, issueTokenPair, revokeRefreshToken, rotateRefreshToken } from "./session.server";
+import { currentUser, endSession, loadUser, requireAdmin, requirePermission, requireUser, startSession, issueTokenPair, revokeRefreshToken, rotateRefreshToken } from "./session.server";
 import type { Category, Order, OrderStatus, Product, Quote, QuoteStatus, Role, StockAdjustment, ContactMessage, SupportTicket } from "../shared/data";
 import { CATEGORIES, ORDER_STATUSES, QUOTE_STATUSES } from "../shared/data";
 import { getPermissionsForRole } from "../shared/permissions";
@@ -192,7 +192,14 @@ export const register = createServerFn({ method: "POST" })
         name: z.string().trim().min(1).max(100),
         email: z.string().trim().email().max(255),
         phone: z.string().trim().max(20),
-        password: z.string().min(6).max(200),
+        password: z
+          .string()
+          .min(8, "Password must be at least 8 characters")
+          .max(200)
+          .refine((v) => /[a-zA-Z]/.test(v), "Password must contain at least one letter")
+          .refine((v) => /[0-9]/.test(v), "Password must contain at least one number"),
+        // role is IGNORED — always forced to 'customer' server-side
+        role: z.string().optional(),
       })
       .parse(d),
   )
@@ -201,7 +208,8 @@ export const register = createServerFn({ method: "POST" })
     const uid = await withDb(async (c) => {
       const exists = await rows(c, "SELECT 1 FROM users WHERE email=?", [data.email.toLowerCase()]);
       if (exists.length) return null;
-      // Public register always forces role 'customer' and must_change_password = 0
+      // Public register ALWAYS forces role='customer' regardless of what the
+      // client sent. The role field in the validator is accepted but silently dropped.
       const [r] = await c.execute(
         "INSERT INTO users (name,email,phone,password_hash,role,must_change_password) VALUES (?,?,?,?,'customer',0)",
         [data.name, data.email.toLowerCase(), data.phone, hash],
@@ -271,14 +279,25 @@ export const forgotPassword = createServerFn({ method: "POST" })
           [userRecord.user_id, tokenHash],
         ),
       );
-      console.log("[DEV] password reset token for", data.email, ":", plainToken);
+      // TODO: send plainToken via email transport.
+      // The token is intentionally NOT logged — logging it would be a security
+      // vulnerability. Wire up an email provider (e.g. nodemailer, Resend) and
+      // send the reset link: /reset-password?token=<plainToken>
     }
     return { ok: true };
   });
 
 export const resetPassword = createServerFn({ method: "POST" })
   .validator((d) =>
-    z.object({ token: z.string(), password: z.string().min(6) }).parse(d),
+    z.object({
+      token: z.string(),
+      password: z
+        .string()
+        .min(8, "Password must be at least 8 characters")
+        .max(200)
+        .refine((v) => /[a-zA-Z]/.test(v), "Password must contain at least one letter")
+        .refine((v) => /[0-9]/.test(v), "Password must contain at least one number"),
+    }).parse(d),
   )
   .handler(async ({ data }) => {
     const tokenHash = createHash("sha256").update(data.token).digest("hex");
@@ -566,7 +585,10 @@ export const changeTemporaryPassword = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    const u = await requireUser();
+    // Use currentUser() directly — this is the ONE endpoint allowed when
+    // must_change_password=true. requireUser() would block it.
+    const u = await currentUser();
+    if (!u) throw Object.assign(new Error("Please sign in first."), { status: 401 });
     const found = await withDb((c) =>
       rows<{ password_hash: string }>(c, "SELECT password_hash FROM users WHERE user_id=?", [
         u.user_id,
@@ -601,7 +623,7 @@ export const changeTemporaryPassword = createServerFn({ method: "POST" })
 
 // ---------- admin & staff ----------
 export const getAdminData = createServerFn({ method: "GET" }).handler(async () => {
-  await requireStaffOrAdmin();
+  await requirePermission("dashboard.view");
   const orders = await loadOrders("", []);
   return withDb(async (c) => ({
     orders,
@@ -629,7 +651,7 @@ export const getAdminData = createServerFn({ method: "GET" }).handler(async () =
 });
 
 export const getAdminOverview = createServerFn({ method: "GET" }).handler(async () => {
-  const u = await requireStaffOrAdmin();
+  const u = await requirePermission("dashboard.view");
   const isStaff = u.role === "staff";
   return withDb(async (c) => {
     // 1. KPI stats
@@ -769,7 +791,7 @@ export const getOrdersPage = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    await requireStaffOrAdmin();
+    await requirePermission("orders.view");
     const page = data.page ?? 1;
     const pageSize = data.pageSize ?? 10;
     const offset = (page - 1) * pageSize;
@@ -857,7 +879,7 @@ export const getOrdersPage = createServerFn({ method: "POST" })
   });
 
 export const getCustomers = createServerFn({ method: "GET" }).handler(async () => {
-  const u = await requireStaffOrAdmin();
+  const u = await requirePermission("customers.view");
   const isStaff = u.role === "staff";
   return withDb(async (c) => {
     const list = await rows<{
@@ -908,7 +930,7 @@ const productInput = z.object({
 export const saveProduct = createServerFn({ method: "POST" })
   .validator((d) => productInput.parse(d))
   .handler(async ({ data }) => {
-    const u = await requireStaffOrAdmin();
+    const u = await requirePermission("products.update");
     let productId = data.product_id;
     await withDb(async (c) => {
       const cat = (
@@ -1001,7 +1023,7 @@ export const setOrderStatus = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    const u = await requireStaffOrAdmin();
+    const u = await requirePermission("orders.update_status");
     await withDb(async (c) => {
       await c.beginTransaction();
       try {
@@ -1153,7 +1175,7 @@ export const addOrderNote = createServerFn({ method: "POST" })
 export const getOrderStatusHistory = createServerFn({ method: "POST" })
   .validator((d) => z.object({ order_id: z.number().int() }).parse(d))
   .handler(async ({ data }) => {
-    await requireStaffOrAdmin();
+    await requirePermission("orders.view");
     return withDb((c) =>
       rows<{
         id: number;
@@ -1188,7 +1210,7 @@ export const setQuoteStatus = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    const u = await requireStaffOrAdmin();
+    const u = await requirePermission("quotes.respond");
     return withDb(async (c) => {
       const [existing] = await rows<{
         quote_id: number;
@@ -1377,7 +1399,7 @@ export const updateProductStock = createServerFn({ method: "POST" })
   });
 
 export const getStockAdjustments = createServerFn({ method: "GET" }).handler(async () => {
-  await requireStaffOrAdmin();
+  await requirePermission("inventory.view");
   return withDb((c) =>
     rows<StockAdjustment>(
       c,
@@ -1488,7 +1510,8 @@ export const getMyNotifications = createServerFn({ method: "GET" }).handler(asyn
 });
 
 export const getAuditLogs = createServerFn({ method: "GET" }).handler(async () => {
-  await requireStaffOrAdmin();
+  // audit.view is NOT in STAFF_PERMISSIONS — staff gets 403 here.
+  await requirePermission("audit.view");
   return withDb((c) =>
     rows<{
       id: number;
@@ -1760,21 +1783,14 @@ export const updateUserRole = createServerFn({ method: "POST" })
     }).parse(d),
   )
   .handler(async ({ data }) => {
-    await requireAdmin();
+    const actor = await requireAdmin();
     return withDb(async (c) => {
-      if (data.role !== "admin") {
-        const [adminCount] = await rows<{ count: number }>(
-          c,
-          "SELECT COUNT(*) as count FROM user_roles WHERE role='admin'",
+      // Safety: an admin cannot change their own role
+      if (actor.user_id === data.userId) {
+        throw Object.assign(
+          new Error("You cannot change your own role. Ask another administrator."),
+          { status: 403 },
         );
-        const [isTargetAdmin] = await rows<{ user_id: number }>(
-          c,
-          "SELECT user_id FROM user_roles WHERE user_id=? AND role='admin'",
-          [data.userId],
-        );
-        if (isTargetAdmin && (adminCount?.count ?? 0) <= 1) {
-          throw new Error("Cannot demote the last remaining administrator.");
-        }
       }
 
       const [targetUser] = await rows<{ user_id: number; name: string }>(
@@ -1791,11 +1807,27 @@ export const updateUserRole = createServerFn({ method: "POST" })
       );
       const oldRole = currentRole?.role ?? "customer";
 
+      // Safety: prevent removing the last active admin
+      if (oldRole === "admin" && data.role !== "admin") {
+        const [adminCount] = await rows<{ count: number }>(
+          c,
+          "SELECT COUNT(*) as count FROM user_roles ur JOIN users u ON u.user_id = ur.user_id WHERE ur.role='admin' AND u.is_active=1",
+        );
+        if ((adminCount?.count ?? 0) <= 1) {
+          throw Object.assign(
+            new Error("Cannot demote the last active administrator. Promote another user first."),
+            { status: 403 },
+          );
+        }
+      }
+
       await c.execute("DELETE FROM user_roles WHERE user_id=?", [data.userId]);
       await c.execute("INSERT INTO user_roles (user_id, role) VALUES (?, ?)", [
         data.userId,
         data.role,
       ]);
+      // Keep the denormalised role column in sync
+      await c.execute("UPDATE users SET role=? WHERE user_id=?", [data.role, data.userId]);
 
       await notify(
         data.userId,
@@ -1825,7 +1857,7 @@ export const createTeamMember = createServerFn({ method: "POST" })
         name: z.string().trim().min(1, "Name is required").max(100),
         email: z.string().trim().email("Valid email required").max(255),
         phone: z.string().trim().max(20).default(""),
-        temporaryPassword: z.string().min(6, "Temporary password must be at least 6 characters").max(200),
+        temporaryPassword: z.string().min(8, "Temporary password must be at least 8 characters").max(200),
         role: z.enum(["staff", "admin"]).default("staff"),
       })
       .parse(d),
@@ -1897,7 +1929,7 @@ export const getUserPermissions = createServerFn({ method: "GET" }).handler(asyn
 export const logExportAction = createServerFn({ method: "POST" })
   .validator((d) => z.object({ count: z.number().int() }).parse(d))
   .handler(async ({ data }) => {
-    const u = await requireStaffOrAdmin();
+    const u = await requirePermission("orders.view");
     await logAction(null, "EXPORT_ORDERS_CSV", "orders", "csv", null, {
       exported_by: u.name,
       count: data.count,
