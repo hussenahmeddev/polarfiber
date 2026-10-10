@@ -144,7 +144,7 @@ function UserMenu() {
             onClick={async () => {
               setOpen(false);
               await logout();
-              nav({ to: "/", replace: true });
+              nav({ to: "/login", replace: true });
             }}
           >
             <LogOut className="h-4 w-4" /> Sign out

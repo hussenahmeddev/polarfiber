@@ -6,8 +6,8 @@ import { Button } from "@/frontend/components/ui/button";
 import { Input } from "@/frontend/components/ui/input";
 import { Label } from "@/frontend/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/frontend/components/ui/tabs";
-import { useStore } from "@/frontend/store";
 import { useServerFn } from "@tanstack/react-start";
+import { useQueryClient } from "@tanstack/react-query";
 import { login as loginFn, register as registerFn } from "@/backend/api.functions";
 
 export const Route = createFileRoute("/login")({
@@ -78,7 +78,7 @@ function Field({ id, label, error, children }: { id: string; label: string; erro
 }
 
 function Login() {
-  const { refreshUser } = useStore();
+  const qc = useQueryClient();
   const login = useServerFn(loginFn);
   const register = useServerFn(registerFn);
   const nav = useNavigate();
@@ -110,7 +110,10 @@ function Login() {
         setFormError(("error" in r && r.error) || "Sign in failed. Please try again.");
         return;
       }
-      await refreshUser();
+      // Seed the store cache directly with the returned user so the
+      // ProtectedRoute on the next page sees the user immediately —
+      // no background re-fetch race needed.
+      qc.setQueryData(["me"], r.user);
       toast.success(`Welcome back, ${r.user.name}`);
       nav({ to: r.user.role === "admin" || r.user.role === "staff" ? "/admin" : "/dashboard" });
     } finally {
@@ -137,7 +140,8 @@ function Login() {
         setFormError(("error" in r && r.error) || "Could not create account.");
         return;
       }
-      await refreshUser();
+      // Seed the store cache directly so the redirect lands with user already set.
+      qc.setQueryData(["me"], r.user);
       toast.success("Account created");
       nav({ to: "/dashboard" });
     } finally {

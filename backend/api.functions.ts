@@ -225,8 +225,8 @@ export const logout = createServerFn({ method: "POST" }).handler(async () => {
     const hash = createHash("sha256").update(plainRefresh).digest("hex");
     await revokeRefreshToken(hash);
   }
-  deleteCookie("pf_access", { path: "/" });
-  deleteCookie("pf_refresh", { path: "/" });
+  deleteCookie("pf_access", { path: "/", sameSite: "lax", secure: true });
+  deleteCookie("pf_refresh", { path: "/", sameSite: "lax", secure: true });
   endSession();
   return { ok: true };
 });

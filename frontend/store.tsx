@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import {
@@ -34,8 +34,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const doLogout = useServerFn(logoutFn);
   const doRefreshTokens = useServerFn(refreshTokensFn);
 
+  // Tracks whether the user has explicitly logged out. While true, the ["me"]
+  // query stays disabled so it cannot silently re-authenticate via a surviving
+  // cookie before the page navigates away.
+  const loggedOut = useRef(false);
+
   const me = useQuery({
     queryKey: ["me"],
+    enabled: !loggedOut.current,
     queryFn: async () => {
       try {
         return await fetchMe();
@@ -70,17 +76,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (loaded) localStorage.setItem(KEY, JSON.stringify(cart));
   }, [cart, loaded]);
 
+  // If query data was seeded externally (e.g. after login via qc.setQueryData),
+  // treat it as a sign-in and re-enable the query for future use.
+  if (loggedOut.current && me.data) {
+    loggedOut.current = false;
+  }
+
   const value: Ctx = {
     // undefined while the query is in-flight, null when definitely not logged in
-    user: me.isPending ? undefined : ((me.data as User | null) ?? null),
+    user: loggedOut.current ? null : (me.isPending ? undefined : ((me.data as User | null) ?? null)),
     products: products.data ?? [],
     cart,
     refreshUser: async () => {
       await qc.invalidateQueries({ queryKey: ["me"] });
     },
     logout: async () => {
+      // Disable the ["me"] query BEFORE the server call so it cannot
+      // re-fire and restore the session via a surviving cookie.
+      loggedOut.current = true;
       await doLogout();
-      qc.clear();
+      qc.setQueryData(["me"], null);
     },
     addToCart: (id, qty = 1) =>
       setCart((p) => {
