@@ -1,5 +1,7 @@
 import { consumeLastCapturedError } from "./error-capture";
 import { renderErrorPage } from "./error-page";
+import { parseUserIdFromCookieHeader, loadUser } from "./session.server";
+import { getPermissionsForRole } from "../shared/permissions";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -44,6 +46,44 @@ function isH3SwallowedErrorBody(body: string): boolean {
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    const url = new URL(request.url);
+    if (url.pathname === "/api/auth/permissions" && request.method === "GET") {
+      try {
+        const uid = parseUserIdFromCookieHeader(request.headers.get("cookie"));
+        if (!uid) {
+          return new Response(JSON.stringify({ role: "customer", permissions: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        const u = await loadUser(uid);
+        if (!u || u.must_change_password) {
+          return new Response(
+            JSON.stringify({ role: u?.role ?? "customer", permissions: [] }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            role: u.role,
+            permissions: getPermissionsForRole(u.role),
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      } catch {
+        return new Response(JSON.stringify({ role: "customer", permissions: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);

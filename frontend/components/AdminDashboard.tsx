@@ -55,6 +55,12 @@ import {
   Send,
   Building,
   Save,
+  UserPlus,
+  History,
+  ThumbsUp,
+  ThumbsDown,
+  Archive,
+  ClipboardCheck,
 } from "lucide-react";
 
 import { Button } from "@/frontend/components/ui/button";
@@ -67,6 +73,10 @@ import { OrderDrawer } from "@/frontend/components/OrderDrawer";
 import { ProductDialog } from "@/frontend/components/ProductDialog";
 import { ConfirmDialog } from "@/frontend/components/ConfirmDialog";
 import { EmptyState } from "@/frontend/components/EmptyState";
+import { NotAuthorized } from "@/frontend/components/NotAuthorized";
+import { MustChangePasswordModal } from "@/frontend/components/MustChangePasswordModal";
+import { Can } from "@/frontend/components/Can";
+import { usePermissions } from "@/frontend/hooks/usePermissions";
 import {
   CATEGORIES,
   ORDER_STATUSES,
@@ -79,6 +89,9 @@ import {
   type OrderStatus,
   type QuoteStatus,
   type CustomerSummary,
+  type StockAdjustment,
+  type ContactMessage as DBContactMessage,
+  type SupportTicket as DBSupportTicket,
 } from "@/shared/data";
 import { useStore, productsKey } from "@/frontend/store";
 import {
@@ -96,6 +109,22 @@ import {
   replySupportTicket,
   getAuditLogs,
   updateUserRole,
+  addOrderNote,
+  getOrderStatusHistory,
+  getStockAdjustments,
+  approveStockAdjustment,
+  rejectStockAdjustment,
+  getContactMessages,
+  archiveContactMessage,
+  deleteContactMessage,
+  getSupportTickets,
+  assignSupportTicket,
+  updateSupportTicketStatus,
+  approveQuote,
+  getCompanySettings,
+  updateCompanySetting,
+  createTeamMember,
+  logExportAction,
 } from "@/backend/api.functions";
 
 const PIE_COLORS = ["#0ea5e9", "#6366f1", "#10b981", "#f59e0b", "#f43f5e"];
@@ -156,6 +185,8 @@ interface SupportTicket {
   category: "Technical Specs" | "Installation" | "Warranty" | "Custom Fabrication";
   priority: "Urgent" | "High" | "Normal" | "Low";
   status: "Open" | "In Progress" | "Resolved";
+  assigned_to?: number | null;
+  assigned_name?: string | null;
   created_at: string;
 }
 
@@ -242,7 +273,8 @@ const INITIAL_AUDIT_LOGS: AuditLogEntry[] = [
 ];
 
 export function AdminDashboard() {
-  const { user } = useStore();
+  const { user, refreshUser } = useStore();
+  const { hasPermission } = usePermissions();
   const nav = useNavigate();
   const qc = useQueryClient();
 
@@ -276,6 +308,12 @@ export function AdminDashboard() {
   // Inventory State
   const [inventorySearch, setInventorySearch] = React.useState("");
   const [stockUpdatingId, setStockUpdatingId] = React.useState<number | null>(null);
+  const [stockReasonPrompt, setStockReasonPrompt] = React.useState<{
+    product: Product;
+    delta: number;
+  } | null>(null);
+  const [stockReasonText, setStockReasonText] = React.useState("");
+  const [inventorySubTab, setInventorySubTab] = React.useState<"stock" | "approvals">("stock");
 
   // Messages State
   const [messages, setMessages] = React.useState<ContactMessage[]>(INITIAL_MESSAGES);
@@ -288,11 +326,16 @@ export function AdminDashboard() {
   const [ticketSearch, setTicketSearch] = React.useState("");
   const [ticketPriorityFilter, setTicketPriorityFilter] = React.useState("all");
   const [newTicketDialogOpen, setNewTicketDialogOpen] = React.useState(false);
-  const [newTicketData, setNewTicketData] = React.useState({
+  const [newTicketData, setNewTicketData] = React.useState<{
+    customer: string;
+    subject: string;
+    category: "Technical Specs" | "Installation" | "Warranty" | "Custom Fabrication";
+    priority: "Urgent" | "High" | "Normal" | "Low";
+  }>({
     customer: "",
     subject: "",
-    category: "Technical Specs" as SupportTicket["category"],
-    priority: "Normal" as SupportTicket["priority"],
+    category: "Technical Specs",
+    priority: "Normal",
   });
 
   // Audit Logs State
@@ -310,6 +353,15 @@ export function AdminDashboard() {
     emailOrderNotify: true,
     lowStockThreshold: 5,
   });
+  const [settingsSubTab, setSettingsSubTab] = React.useState<"general" | "team">("general");
+  const [newTeamMember, setNewTeamMember] = React.useState({
+    name: "",
+    email: "",
+    phone: "",
+    role: "staff" as "staff" | "admin",
+    temporaryPassword: "",
+  });
+  const [creatingMember, setCreatingMember] = React.useState(false);
 
   // Server functions
   const fetchOverview = useServerFn(getAdminOverview);
@@ -326,6 +378,22 @@ export function AdminDashboard() {
   const mutateReplyTicket = useServerFn(replySupportTicket);
   const fetchAuditLogs = useServerFn(getAuditLogs);
   const mutateUserRole = useServerFn(updateUserRole);
+  const mutateAddOrderNote = useServerFn(addOrderNote);
+  const fetchOrderHistory = useServerFn(getOrderStatusHistory);
+  const fetchStockAdjustments = useServerFn(getStockAdjustments);
+  const mutateApproveStockAdj = useServerFn(approveStockAdjustment);
+  const mutateRejectStockAdj = useServerFn(rejectStockAdjustment);
+  const fetchContactMessages = useServerFn(getContactMessages);
+  const mutateArchiveMessage = useServerFn(archiveContactMessage);
+  const mutateDeleteMessage = useServerFn(deleteContactMessage);
+  const fetchSupportTickets = useServerFn(getSupportTickets);
+  const mutateAssignTicket = useServerFn(assignSupportTicket);
+  const mutateTicketStatus = useServerFn(updateSupportTicketStatus);
+  const mutateApproveQuote = useServerFn(approveQuote);
+  const fetchCompanySettings = useServerFn(getCompanySettings);
+  const mutateCompanySetting = useServerFn(updateCompanySetting);
+  const mutateCreateTeamMember = useServerFn(createTeamMember);
+  const mutateLogExportAction = useServerFn(logExportAction);
 
   const isStaffOrAdmin = user?.role === "admin" || user?.role === "staff";
 
@@ -374,22 +442,25 @@ export function AdminDashboard() {
     enabled: isStaffOrAdmin,
   });
 
+  const stockAdjustmentsQuery = useQuery({
+    queryKey: ["admin", "stock-adjustments"],
+    queryFn: () => fetchStockAdjustments(),
+    enabled: isStaffOrAdmin && activeTab === "inventory",
+  });
+
   // Non-staff/admin guard
   if (!user || !isStaffOrAdmin) {
     return (
-      <div className="mx-auto max-w-md px-4 py-24 text-center">
-        <div className="flex h-14 w-14 mx-auto items-center justify-center rounded-2xl bg-destructive/10 text-destructive shadow-xs">
-          <AlertTriangle className="h-7 w-7" />
-        </div>
-        <h1 className="mt-4 text-2xl font-bold text-foreground">Management Access Required</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          You must be logged in with a staff or administrator account to access this management dashboard.
-        </p>
-        <Button asChild className="mt-6 w-full bg-primary hover:bg-primary/90 text-primary-foreground">
-          <Link to="/login">Sign In with Staff or Admin Account</Link>
-        </Button>
-      </div>
+      <NotAuthorized
+        userRole={user?.role}
+        message="You must be logged in with a staff or administrator account to access the management portal."
+      />
     );
+  }
+
+  // First-login mandatory password change
+  if (user.must_change_password) {
+    return <MustChangePasswordModal user={user} onComplete={() => refreshUser()} />;
   }
 
   // Calculations & KPIs
@@ -522,12 +593,32 @@ export function AdminDashboard() {
     }
   };
 
-  const handleQuickStockAdjust = async (product: Product, delta: number) => {
-    const newStock = Math.max(0, product.stock + delta);
+  const handleQuickStockAdjust = (product: Product, delta: number) => {
+    setStockReasonPrompt({ product, delta });
+    setStockReasonText("");
+  };
+
+  const handleConfirmStockAdjust = async () => {
+    if (!stockReasonPrompt) return;
+    if (!stockReasonText.trim()) {
+      toast.error("A mandatory reason must be provided for stock adjustments.");
+      return;
+    }
+    const { product, delta } = stockReasonPrompt;
     setStockUpdatingId(product.product_id);
     try {
-      await mutateStock({ data: { id: product.product_id, stock: newStock } });
-      toast.success(`Stock for ${product.name} updated to ${newStock} units`);
+      const res = await mutateStock({
+        data: {
+          id: product.product_id,
+          delta: delta,
+          reason: stockReasonText.trim(),
+        },
+      });
+      if ((res as any).pendingApproval) {
+        toast.info((res as any).message);
+      } else {
+        toast.success(`Stock for ${product.name} updated (${delta > 0 ? `+${delta}` : delta})`);
+      }
       setLogs((prev) => [
         {
           id: `LOG-${Date.now().toString().slice(-4)}`,
@@ -535,13 +626,16 @@ export function AdminDashboard() {
           actor: user.name,
           action: "STOCK_ADJUSTMENT",
           category: "Inventory",
-          details: `${product.name}: ${product.stock} -> ${newStock} units (${delta > 0 ? `+${delta}` : delta})`,
+          details: `${product.name}: delta ${delta > 0 ? `+${delta}` : delta} (Reason: ${stockReasonText.trim()})`,
         },
         ...prev,
       ]);
       await qc.invalidateQueries({ queryKey: ["admin", "products"] });
       await qc.invalidateQueries({ queryKey: productsKey });
       await qc.invalidateQueries({ queryKey: ["admin", "overview"] });
+      await qc.invalidateQueries({ queryKey: ["admin", "stock-adjustments"] });
+      setStockReasonPrompt(null);
+      setStockReasonText("");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to adjust stock");
     } finally {
@@ -575,6 +669,7 @@ export function AdminDashboard() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    mutateLogExportAction({ data: { count: orders.length } }).catch(() => {});
     toast.success("Orders exported to CSV");
   };
 
@@ -714,17 +809,19 @@ export function AdminDashboard() {
             </div>
 
             {/* 3. Revenue (Delivered) */}
-            <div className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border">
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground">Revenue (Delivered)</p>
-                <p className="text-2xl font-bold text-foreground mt-1.5">
-                  {etb(deliveredRevenue)}
-                </p>
+            <Can permission="revenue.view">
+              <div className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border">
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground">Revenue (Delivered)</p>
+                  <p className="text-2xl font-bold text-foreground mt-1.5">
+                    {etb(deliveredRevenue)}
+                  </p>
+                </div>
+                <div className="h-13 w-13 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-500 group-hover:scale-105 transition-transform">
+                  <DollarSign className="h-6 w-6 stroke-[2.2]" />
+                </div>
               </div>
-              <div className="h-13 w-13 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-500 group-hover:scale-105 transition-transform">
-                <DollarSign className="h-6 w-6 stroke-[2.2]" />
-              </div>
-            </div>
+            </Can>
 
             {/* 4. Pending Quotes */}
             <div
@@ -948,16 +1045,18 @@ export function AdminDashboard() {
               <h1 className="text-2xl font-bold tracking-tight text-foreground">Products Catalog</h1>
               <p className="text-sm text-muted-foreground mt-1">Manage fiberglass listings, technical specs, and prices</p>
             </div>
-            <Button
-              onClick={() => {
-                setEditingProduct(null);
-                setProductDialogOpen(true);
-              }}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 shadow-xs"
-            >
-              <Plus className="h-4 w-4" />
-              Add Product
-            </Button>
+            <Can permission="products.create">
+              <Button
+                onClick={() => {
+                  setEditingProduct(null);
+                  setProductDialogOpen(true);
+                }}
+                className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 shadow-xs"
+              >
+                <Plus className="h-4 w-4" />
+                Add Product
+              </Button>
+            </Can>
           </div>
 
           <div className="flex flex-col sm:flex-row items-center gap-3">
@@ -1056,17 +1155,19 @@ export function AdminDashboard() {
                               >
                                 <Pencil className="h-4 w-4" />
                               </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => {
-                                  setDeletingProduct(p);
-                                  setConfirmDeleteDialogOpen(true);
-                                }}
-                                className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-600"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                              <Can permission="products.delete">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    setDeletingProduct(p);
+                                    setConfirmDeleteDialogOpen(true);
+                                  }}
+                                  className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-600"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </Can>
                             </div>
                           </td>
                         </tr>
@@ -1083,58 +1184,64 @@ export function AdminDashboard() {
       {/* ======================================================== */}
       {/* 3. CATEGORIES TAB                                       */}
       {/* ======================================================== */}
-      {activeTab === "categories" && (
-        <div className="space-y-6 animate-in fade-in-50 duration-200">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Product Categories</h1>
-            <p className="text-sm text-muted-foreground mt-1">Manage fiberglass manufacturing lines and taxonomy</p>
-          </div>
+      {activeTab === "categories" &&
+        (!hasPermission("categories.view") ? (
+          <NotAuthorized
+            userRole={user?.role}
+            message="Product categories management is restricted to administrators."
+          />
+        ) : (
+          <div className="space-y-6 animate-in fade-in-50 duration-200">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-foreground">Product Categories</h1>
+              <p className="text-sm text-muted-foreground mt-1">Manage fiberglass manufacturing lines and taxonomy</p>
+            </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-            {CATEGORIES.map((catName) => {
-              const catProds = allProducts.filter((p) => p.category === catName);
-              const catStock = catProds.reduce((sum, p) => sum + p.stock, 0);
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+              {CATEGORIES.map((catName) => {
+                const catProds = allProducts.filter((p) => p.category === catName);
+                const catStock = catProds.reduce((sum, p) => sum + p.stock, 0);
 
-              return (
-                <div
-                  key={catName}
-                  className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow"
-                >
-                  <div>
-                    <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary mb-4">
-                      <Layers className="h-6 w-6" />
-                    </div>
-                    <h3 className="font-bold text-base text-foreground">{catName}</h3>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Reinforced structural composite manufacturing specifications for Ethiopian industrial and domestic sectors.
-                    </p>
-                    <div className="mt-4 pt-4 border-t border-border flex items-center justify-between text-xs font-semibold">
-                      <span className="text-muted-foreground">Listed Products:</span>
-                      <span className="text-foreground">{catProds.length} SKUs</span>
-                    </div>
-                    <div className="mt-1 flex items-center justify-between text-xs font-semibold">
-                      <span className="text-muted-foreground">Warehouse Units:</span>
-                      <span className="text-primary">{catStock} units</span>
-                    </div>
-                  </div>
-
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setProductCategoryFilter(catName);
-                      setActiveTab("products");
-                    }}
-                    className="mt-5 w-full text-xs font-semibold text-primary border-primary/20 hover:bg-primary/10"
+                return (
+                  <div
+                    key={catName}
+                    className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow"
                   >
-                    View Products in {catName}
-                  </Button>
-                </div>
-              );
-            })}
+                    <div>
+                      <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary mb-4">
+                        <Layers className="h-6 w-6" />
+                      </div>
+                      <h3 className="font-bold text-base text-foreground">{catName}</h3>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Reinforced structural composite manufacturing specifications for Ethiopian industrial and domestic sectors.
+                      </p>
+                      <div className="mt-4 pt-4 border-t border-border flex items-center justify-between text-xs font-semibold">
+                        <span className="text-muted-foreground">Listed Products:</span>
+                        <span className="text-foreground">{catProds.length} SKUs</span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between text-xs font-semibold">
+                        <span className="text-muted-foreground">Warehouse Units:</span>
+                        <span className="text-primary">{catStock} units</span>
+                      </div>
+                    </div>
+
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setProductCategoryFilter(catName);
+                        setActiveTab("products");
+                      }}
+                      className="mt-5 w-full text-xs font-semibold text-primary border-primary/20 hover:bg-primary/10"
+                    >
+                      View Products in {catName}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        ))}
 
       {/* ======================================================== */}
       {/* 4. INVENTORY TAB                                        */}
@@ -1159,110 +1266,321 @@ export function AdminDashboard() {
               <p className="text-xs font-semibold text-muted-foreground">Low Stock Warnings</p>
               <p className="text-3xl font-bold text-amber-500 mt-1.5">{lowStockCount}</p>
             </div>
-            <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
-              <p className="text-xs font-semibold text-muted-foreground">Stock Inventory Value</p>
-              <p className="text-2xl font-bold text-emerald-600 mt-1.5">{etb(totalStockValue)}</p>
-            </div>
+            <Can permission="revenue.view">
+              <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
+                <p className="text-xs font-semibold text-muted-foreground">Stock Inventory Value</p>
+                <p className="text-2xl font-bold text-emerald-600 mt-1.5">{etb(totalStockValue)}</p>
+              </div>
+            </Can>
           </div>
 
-          <div className="flex items-center justify-between">
-            <div className="relative w-full max-w-xs">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
-              <Input
-                placeholder="Filter by product name..."
-                value={inventorySearch}
-                onChange={(e) => setInventorySearch(e.target.value)}
-                className="pl-9 bg-card border-border"
-              />
-            </div>
+          {/* Sub-tabs */}
+          <div className="flex border-b border-border gap-4">
+            <button
+              onClick={() => setInventorySubTab("stock")}
+              className={`pb-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
+                inventorySubTab === "stock"
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Warehouse Stock ({filteredInventory.length})
+            </button>
+            <button
+              onClick={() => setInventorySubTab("approvals")}
+              className={`pb-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer flex items-center gap-2 ${
+                inventorySubTab === "approvals"
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Pending Approvals
+              {(stockAdjustmentsQuery.data?.filter((a) => a.status === "pending_approval")?.length ?? 0) > 0 && (
+                <span className="bg-amber-500 text-white text-xs px-2 py-0.5 rounded-full font-bold">
+                  {stockAdjustmentsQuery.data?.filter((a) => a.status === "pending_approval").length}
+                </span>
+              )}
+            </button>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  <tr>
-                    <th className="px-5 py-4">Item</th>
-                    <th className="px-5 py-4">Category</th>
-                    <th className="px-5 py-4">Current Stock</th>
-                    <th className="px-5 py-4">Status</th>
-                    <th className="px-5 py-4 text-right">Quick Restock / Adjust</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {filteredInventory.map((p) => {
-                    const isUpdating = stockUpdatingId === p.product_id;
-                    const isLow = p.stock <= 5;
-                    const isOut = p.stock === 0;
+          {inventorySubTab === "stock" ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="relative w-full max-w-xs">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
+                  <Input
+                    placeholder="Filter by product name..."
+                    value={inventorySearch}
+                    onChange={(e) => setInventorySearch(e.target.value)}
+                    className="pl-9 bg-card border-border"
+                  />
+                </div>
+              </div>
 
-                    return (
-                      <tr key={p.product_id} className="hover:bg-muted/50/60 transition-colors">
-                        <td className="px-5 py-4">
-                          <p className="font-semibold text-foreground">{p.name}</p>
-                          <p className="text-xs text-muted-foreground/60">Unit Price: {etb(p.price)}</p>
-                        </td>
-                        <td className="px-5 py-4 text-muted-foreground">{p.category}</td>
-                        <td className="px-5 py-4 font-bold text-base text-foreground">{p.stock} units</td>
-                        <td className="px-5 py-4">
-                          <span
-                            className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                              isOut
-                                ? "bg-rose-100 text-rose-800"
-                                : isLow
-                                  ? "bg-amber-100 text-amber-800"
-                                  : "bg-emerald-100 text-emerald-800"
-                            }`}
-                          >
-                            {isOut ? "Out of Stock" : isLow ? "Low Stock" : "Well Stocked"}
-                          </span>
-                        </td>
-                        <td className="px-5 py-4 text-right">
-                          <div className="inline-flex items-center gap-1.5">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={isUpdating || p.stock === 0}
-                              onClick={() => handleQuickStockAdjust(p, -1)}
-                              className="h-8 px-2 text-xs"
-                            >
-                              -1
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={isUpdating}
-                              onClick={() => handleQuickStockAdjust(p, 1)}
-                              className="h-8 px-2 text-xs font-semibold text-primary"
-                            >
-                              +1
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={isUpdating}
-                              onClick={() => handleQuickStockAdjust(p, 5)}
-                              className="h-8 px-2 text-xs font-semibold text-emerald-600"
-                            >
-                              +5
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={isUpdating}
-                              onClick={() => handleQuickStockAdjust(p, 10)}
-                              className="h-8 px-2 text-xs font-semibold text-indigo-600"
-                            >
-                              +10
-                            </Button>
-                          </div>
-                        </td>
+              <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                      <tr>
+                        <th className="px-5 py-4">Item</th>
+                        <th className="px-5 py-4">Category</th>
+                        <th className="px-5 py-4">Current Stock</th>
+                        <th className="px-5 py-4">Status</th>
+                        <th className="px-5 py-4 text-right">Quick Restock / Adjust</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {filteredInventory.map((p) => {
+                        const isUpdating = stockUpdatingId === p.product_id;
+                        const isLow = p.stock <= 5;
+                        const isOut = p.stock === 0;
+
+                        return (
+                          <tr key={p.product_id} className="hover:bg-muted/50/60 transition-colors">
+                            <td className="px-5 py-4">
+                              <p className="font-semibold text-foreground">{p.name}</p>
+                              <p className="text-xs text-muted-foreground/60">Unit Price: {etb(p.price)}</p>
+                            </td>
+                            <td className="px-5 py-4 text-muted-foreground">{p.category}</td>
+                            <td className="px-5 py-4 font-bold text-base text-foreground">{p.stock} units</td>
+                            <td className="px-5 py-4">
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                  isOut
+                                    ? "bg-rose-100 text-rose-800"
+                                    : isLow
+                                      ? "bg-amber-100 text-amber-800"
+                                      : "bg-emerald-100 text-emerald-800"
+                                }`}
+                              >
+                                {isOut ? "Out of Stock" : isLow ? "Low Stock" : "Well Stocked"}
+                              </span>
+                            </td>
+                            <td className="px-5 py-4 text-right">
+                              <div className="inline-flex items-center gap-1.5">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={isUpdating || p.stock === 0}
+                                  onClick={() => handleQuickStockAdjust(p, -1)}
+                                  className="h-8 px-2 text-xs"
+                                >
+                                  -1
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={isUpdating}
+                                  onClick={() => handleQuickStockAdjust(p, 1)}
+                                  className="h-8 px-2 text-xs font-semibold text-primary"
+                                >
+                                  +1
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={isUpdating}
+                                  onClick={() => handleQuickStockAdjust(p, 5)}
+                                  className="h-8 px-2 text-xs font-semibold text-emerald-600"
+                                >
+                                  +5
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={isUpdating}
+                                  onClick={() => handleQuickStockAdjust(p, 10)}
+                                  className="h-8 px-2 text-xs font-semibold text-indigo-600"
+                                >
+                                  +10
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                      <tr>
+                        <th className="px-5 py-4">Request #</th>
+                        <th className="px-5 py-4">Product</th>
+                        <th className="px-5 py-4">Requested Delta</th>
+                        <th className="px-5 py-4">Reason</th>
+                        <th className="px-5 py-4">Requested By</th>
+                        <th className="px-5 py-4">Date</th>
+                        <th className="px-5 py-4">Status</th>
+                        <th className="px-5 py-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {!(stockAdjustmentsQuery.data && stockAdjustmentsQuery.data.length > 0) ? (
+                        <tr>
+                          <td colSpan={8} className="py-12 text-center text-muted-foreground/60 text-sm">
+                            No stock adjustment requests found.
+                          </td>
+                        </tr>
+                      ) : (
+                        stockAdjustmentsQuery.data.map((adj) => (
+                          <tr key={adj.id} className="hover:bg-muted/50/60 transition-colors">
+                            <td className="px-5 py-4 font-mono font-bold text-primary">#{adj.id}</td>
+                            <td className="px-5 py-4 font-semibold text-foreground">{adj.product_name ?? `Product #${adj.product_id}`}</td>
+                            <td className="px-5 py-4 font-bold">
+                              <span className={adj.quantity > 0 ? "text-emerald-600" : "text-rose-600"}>
+                                {adj.quantity > 0 ? `+${adj.quantity}` : adj.quantity} units
+                              </span>
+                            </td>
+                            <td className="px-5 py-4 text-xs text-muted-foreground max-w-xs">{adj.reason}</td>
+                            <td className="px-5 py-4 text-foreground font-medium">{adj.staff_name ?? `User #${adj.staff_id}`}</td>
+                            <td className="px-5 py-4 text-xs text-muted-foreground/60">{adj.created_at}</td>
+                            <td className="px-5 py-4">
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                  adj.status === "approved"
+                                    ? "bg-emerald-100 text-emerald-800"
+                                    : adj.status === "rejected"
+                                      ? "bg-rose-100 text-rose-800"
+                                      : "bg-amber-100 text-amber-800"
+                                }`}
+                              >
+                                {adj.status === "pending_approval"
+                                  ? "Pending Admin Approval"
+                                  : adj.status === "approved"
+                                    ? "Approved"
+                                    : "Rejected"}
+                              </span>
+                            </td>
+                            <td className="px-5 py-4 text-right">
+                              {adj.status === "pending_approval" ? (
+                                <Can
+                                  permission="inventory.adjust_unlimited"
+                                  fallback={
+                                    <span className="text-xs text-muted-foreground italic">Awaiting Admin</span>
+                                  }
+                                >
+                                  <div className="inline-flex items-center gap-1.5">
+                                    <Button
+                                      size="sm"
+                                      onClick={async () => {
+                                        try {
+                                          await mutateApproveStockAdj({ data: { id: adj.id } });
+                                          toast.success(`Adjustment #${adj.id} approved`);
+                                          stockAdjustmentsQuery.refetch();
+                                          productsQuery.refetch();
+                                        } catch (err) {
+                                          toast.error(err instanceof Error ? err.message : "Failed to approve");
+                                        }
+                                      }}
+                                      className="h-8 px-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                                    >
+                                      Approve
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={async () => {
+                                        try {
+                                          await mutateRejectStockAdj({ data: { id: adj.id } });
+                                          toast.success(`Adjustment #${adj.id} rejected`);
+                                          stockAdjustmentsQuery.refetch();
+                                        } catch (err) {
+                                          toast.error(err instanceof Error ? err.message : "Failed to reject");
+                                        }
+                                      }}
+                                      className="h-8 px-2.5 text-xs text-rose-600 hover:bg-rose-50 border-rose-200"
+                                    >
+                                      Reject
+                                    </Button>
+                                  </div>
+                                </Can>
+                              ) : (
+                                <span className="text-xs text-muted-foreground/60">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Mandatory Stock Reason Prompt Dialog */}
+          {stockReasonPrompt && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4">
+              <div className="w-full max-w-md rounded-2xl bg-card p-6 shadow-2xl space-y-4">
+                <h3 className="font-bold text-lg text-foreground">Confirm Stock Adjustment</h3>
+                <div className="rounded-xl bg-muted/50 p-4 text-xs space-y-1">
+                  <p>
+                    <strong className="text-foreground">Product:</strong> {stockReasonPrompt.product.name}
+                  </p>
+                  <p>
+                    <strong className="text-foreground">Adjustment:</strong>{" "}
+                    <span className={stockReasonPrompt.delta > 0 ? "text-emerald-600 font-bold" : "text-rose-600 font-bold"}>
+                      {stockReasonPrompt.delta > 0 ? `+${stockReasonPrompt.delta}` : stockReasonPrompt.delta} units
+                    </span>
+                  </p>
+                  <p>
+                    <strong className="text-foreground">New Stock:</strong>{" "}
+                    {Math.max(0, stockReasonPrompt.product.stock + stockReasonPrompt.delta)} units
+                  </p>
+                </div>
+
+                {user?.role === "staff" && Math.abs(stockReasonPrompt.delta) > 50 && (
+                  <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 flex items-start gap-2">
+                    <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      Adjustment of {Math.abs(stockReasonPrompt.delta)} units exceeds the 50-unit staff limit and requires admin approval. This will create a pending request for review.
+                    </span>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-foreground">
+                    Mandatory Reason for Adjustment *
+                  </Label>
+                  <textarea
+                    rows={3}
+                    placeholder="e.g. Received new shipment from manufacturing / damaged during transport..."
+                    value={stockReasonText}
+                    onChange={(e) => setStockReasonText(e.target.value)}
+                    className="w-full rounded-xl border border-border p-3 text-xs focus:outline-sky-500"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setStockReasonPrompt(null);
+                      setStockReasonText("");
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={!stockReasonText.trim()}
+                    onClick={handleConfirmStockAdjust}
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                  >
+                    Confirm Adjustment
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1543,14 +1861,14 @@ export function AdminDashboard() {
                     <th className="px-5 py-4">Phone</th>
                     <th className="px-5 py-4">Role</th>
                     <th className="px-5 py-4">Orders Placed</th>
-                    <th className="px-5 py-4">Lifetime Spend</th>
+                    {hasPermission("revenue.view") && <th className="px-5 py-4">Lifetime Spend</th>}
                     <th className="px-5 py-4">Joined</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {filteredCustomers.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-muted-foreground/60 text-sm">
+                      <td colSpan={hasPermission("revenue.view") ? 7 : 6} className="py-12 text-center text-muted-foreground/60 text-sm">
                         No customer accounts found.
                       </td>
                     </tr>
@@ -1561,7 +1879,22 @@ export function AdminDashboard() {
                         <td className="px-5 py-4 text-muted-foreground">{c.email}</td>
                         <td className="px-5 py-4 text-muted-foreground">{c.phone || "—"}</td>
                         <td className="px-5 py-4">
-                          {user?.role === "admin" ? (
+                          <Can
+                            permission="team.update"
+                            fallback={
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
+                                  c.role === "admin"
+                                    ? "bg-primary/15 text-primary"
+                                    : c.role === "staff"
+                                      ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                                      : "bg-muted text-muted-foreground"
+                                }`}
+                              >
+                                {c.role}
+                              </span>
+                            }
+                          >
                             <select
                               value={c.role}
                               onChange={async (e) => {
@@ -1588,22 +1921,12 @@ export function AdminDashboard() {
                               <option value="staff">Staff</option>
                               <option value="admin">Admin</option>
                             </select>
-                          ) : (
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
-                                c.role === "admin"
-                                  ? "bg-primary/15 text-primary"
-                                  : c.role === "staff"
-                                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-                                    : "bg-muted text-muted-foreground"
-                              }`}
-                            >
-                              {c.role}
-                            </span>
-                          )}
+                          </Can>
                         </td>
                         <td className="px-5 py-4 font-semibold text-foreground">{c.orders_count}</td>
-                        <td className="px-5 py-4 font-bold text-primary">{etb(c.total_spent)}</td>
+                        {hasPermission("revenue.view") && (
+                          <td className="px-5 py-4 font-bold text-primary">{etb(c.total_spent)}</td>
+                        )}
                         <td className="px-5 py-4 text-xs text-muted-foreground/60">{c.created_at}</td>
                       </tr>
                     ))
@@ -1694,7 +2017,48 @@ export function AdminDashboard() {
                       placeholder="Type your response to the customer..."
                       className="w-full rounded-xl border border-border p-3 text-sm focus:outline-sky-500"
                     />
-                    <div className="flex justify-end gap-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={async () => {
+                            try {
+                              await mutateArchiveMessage({ data: { id: selectedMessage.id } });
+                              toast.success("Message archived");
+                              setMessages((prev) => prev.filter((item) => item.id !== selectedMessage.id));
+                              setSelectedMessage(null);
+                            } catch (err) {
+                              toast.error(err instanceof Error ? err.message : "Failed to archive message");
+                            }
+                          }}
+                          className="text-xs text-muted-foreground gap-1.5"
+                        >
+                          <Archive className="h-3.5 w-3.5" />
+                          Archive
+                        </Button>
+                        <Can permission="messages.delete">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={async () => {
+                              try {
+                                await mutateDeleteMessage({ data: { id: selectedMessage.id } });
+                                toast.success("Message deleted");
+                                setMessages((prev) => prev.filter((item) => item.id !== selectedMessage.id));
+                                setSelectedMessage(null);
+                              } catch (err) {
+                                toast.error(err instanceof Error ? err.message : "Failed to delete message");
+                              }
+                            }}
+                            className="text-xs text-rose-600 border-rose-200 hover:bg-rose-50 gap-1.5"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </Button>
+                        </Can>
+                      </div>
+
                       <Button
                         size="sm"
                         onClick={async () => {
@@ -1792,6 +2156,7 @@ export function AdminDashboard() {
                     <th className="px-5 py-4">Category</th>
                     <th className="px-5 py-4">Priority</th>
                     <th className="px-5 py-4">Status</th>
+                    <th className="px-5 py-4">Assigned To</th>
                     <th className="px-5 py-4 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -1827,6 +2192,45 @@ export function AdminDashboard() {
                         >
                           {t.status}
                         </span>
+                      </td>
+                      <td className="px-5 py-4">
+                        {t.assigned_to ? (
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                              t.assigned_to === user.user_id
+                                ? "bg-emerald-100 text-emerald-800"
+                                : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            {t.assigned_to === user.user_id ? "Assigned to You" : (t.assigned_name || "Assigned")}
+                          </span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={async () => {
+                              const numId = Number(t.id.replace(/\D/g, "")) || 1;
+                              try {
+                                await mutateAssignTicket({
+                                  data: { ticket_id: numId, assigned_to: user.user_id },
+                                });
+                                toast.success(`Ticket ${t.id} assigned to you`);
+                                setTickets((prev) =>
+                                  prev.map((item) =>
+                                    item.id === t.id
+                                      ? { ...item, assigned_to: user.user_id, assigned_name: user.name }
+                                      : item,
+                                  ),
+                                );
+                              } catch (err) {
+                                toast.error(err instanceof Error ? err.message : "Failed to assign ticket");
+                              }
+                            }}
+                            className="text-xs h-7 px-2 text-primary hover:bg-primary/10"
+                          >
+                            Assign to Me
+                          </Button>
+                        )}
                       </td>
                       <td className="px-5 py-4 text-right">
                         <Button
@@ -1870,254 +2274,443 @@ export function AdminDashboard() {
       {/* ======================================================== */}
       {/* 10. REPORTS TAB                                         */}
       {/* ======================================================== */}
-      {activeTab === "reports" && (
-        <div className="space-y-6 animate-in fade-in-50 duration-200">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Analytics & Sales Reports</h1>
-            <p className="text-sm text-muted-foreground mt-1">Financial performance, daily volume, and catalog category revenue</p>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Orders Timeline Chart */}
-            <div className="bg-card border border-border rounded-2xl p-6 shadow-xs lg:col-span-2">
-              <h3 className="text-base font-bold text-foreground">30-Day Order Volume Trend</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">Daily orders placed across Ethiopia</p>
-              <div className="mt-6 h-64 w-full">
-                {overview?.timeline && overview.timeline.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={overview.timeline}>
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip />
-                      <Line type="monotone" dataKey="count" stroke="#0ea5e9" strokeWidth={2.5} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground/60">
-                    No order activity in the last 30 days.
-                  </div>
-                )}
-              </div>
+      {activeTab === "reports" &&
+        (!hasPermission("reports.view") ? (
+          <NotAuthorized
+            userRole={user?.role}
+            message="Financial performance and sales analytics reports are restricted to administrators."
+          />
+        ) : (
+          <div className="space-y-6 animate-in fade-in-50 duration-200">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-foreground">Analytics & Sales Reports</h1>
+              <p className="text-sm text-muted-foreground mt-1">Financial performance, daily volume, and catalog category revenue</p>
             </div>
 
-            {/* Order Status Distribution */}
-            <div className="bg-card border border-border rounded-2xl p-6 shadow-xs">
-              <h3 className="text-base font-bold text-foreground">Order Status Distribution</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">Breakdown of orders</p>
-              <div className="mt-6 h-64 w-full">
-                {overview?.statusDistribution && overview.statusDistribution.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={overview.statusDistribution}
-                        dataKey="count"
-                        nameKey="status"
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={50}
-                        outerRadius={75}
-                      >
-                        {overview.statusDistribution.map((_, index) => (
-                          <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                      <Legend verticalAlign="bottom" height={36} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground/60">
-                    No order status data.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Revenue by category */}
-          <div className="bg-card border border-border rounded-2xl p-6 shadow-xs">
-            <h3 className="text-base font-bold text-foreground">Revenue by Category (ETB)</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">Total sales generated per fiberglass product line</p>
-            <div className="mt-6 h-64 w-full">
-              {overview?.categoryRevenue && overview.categoryRevenue.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={overview.categoryRevenue}>
-                    <XAxis dataKey="category" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v / 1000}k`} />
-                    <Tooltip formatter={(val) => [etb(Number(val)), "Revenue"]} />
-                    <Bar dataKey="revenue" fill="#0ea5e9" radius={[6, 6, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="flex h-full items-center justify-center text-xs text-muted-foreground/60">
-                  No sales recorded by category yet.
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Orders Timeline Chart */}
+              <div className="bg-card border border-border rounded-2xl p-6 shadow-xs lg:col-span-2">
+                <h3 className="text-base font-bold text-foreground">30-Day Order Volume Trend</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Daily orders placed across Ethiopia</p>
+                <div className="mt-6 h-64 w-full">
+                  {overview?.timeline && overview.timeline.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={overview.timeline}>
+                        <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
+                        <YAxis tick={{ fontSize: 11 }} />
+                        <Tooltip />
+                        <Line type="monotone" dataKey="count" stroke="#0ea5e9" strokeWidth={2.5} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-xs text-muted-foreground/60">
+                      No order activity in the last 30 days.
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
+
+              {/* Order Status Distribution */}
+              <div className="bg-card border border-border rounded-2xl p-6 shadow-xs">
+                <h3 className="text-base font-bold text-foreground">Order Status Distribution</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Breakdown of orders</p>
+                <div className="mt-6 h-64 w-full">
+                  {overview?.statusDistribution && overview.statusDistribution.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={overview.statusDistribution}
+                          dataKey="count"
+                          nameKey="status"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={50}
+                          outerRadius={75}
+                        >
+                          {overview.statusDistribution.map((_, index) => (
+                            <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip />
+                        <Legend verticalAlign="bottom" height={36} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-xs text-muted-foreground/60">
+                      No order status data.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Revenue by category */}
+            <div className="bg-card border border-border rounded-2xl p-6 shadow-xs">
+              <h3 className="text-base font-bold text-foreground">Revenue by Category (ETB)</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Total sales generated per fiberglass product line</p>
+              <div className="mt-6 h-64 w-full">
+                {overview?.categoryRevenue && overview.categoryRevenue.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={overview.categoryRevenue}>
+                      <XAxis dataKey="category" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v / 1000}k`} />
+                      <Tooltip formatter={(val) => [etb(Number(val)), "Revenue"]} />
+                      <Bar dataKey="revenue" fill="#0ea5e9" radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground/60">
+                    No sales recorded by category yet.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        ))}
 
       {/* ======================================================== */}
       {/* 11. AUDIT LOGS TAB                                      */}
       {/* ======================================================== */}
-      {activeTab === "audit-logs" && (
-        <div className="space-y-6 animate-in fade-in-50 duration-200">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight text-foreground">System Audit Logs</h1>
-              <p className="text-sm text-muted-foreground mt-1">Security traceability, catalog changes, and administrative actions</p>
+      {activeTab === "audit-logs" &&
+        (!hasPermission("audit.view") ? (
+          <NotAuthorized
+            userRole={user?.role}
+            message="System audit logs and compliance records are restricted to administrators."
+          />
+        ) : (
+          <div className="space-y-6 animate-in fade-in-50 duration-200">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight text-foreground">System Audit Logs</h1>
+                <p className="text-sm text-muted-foreground mt-1">Security traceability, catalog changes, and administrative actions</p>
+              </div>
+              <select
+                value={logCategoryFilter}
+                onChange={(e) => setLogCategoryFilter(e.target.value)}
+                className="h-10 rounded-lg border border-border bg-card px-3 text-sm font-medium text-muted-foreground"
+              >
+                <option value="all">All Event Categories</option>
+                <option value="Orders">Orders</option>
+                <option value="Catalog">Catalog</option>
+                <option value="Inventory">Inventory</option>
+                <option value="Quotes">Quotes</option>
+              </select>
             </div>
-            <select
-              value={logCategoryFilter}
-              onChange={(e) => setLogCategoryFilter(e.target.value)}
-              className="h-10 rounded-lg border border-border bg-card px-3 text-sm font-medium text-muted-foreground"
-            >
-              <option value="all">All Event Categories</option>
-              <option value="Orders">Orders</option>
-              <option value="Catalog">Catalog</option>
-              <option value="Inventory">Inventory</option>
-              <option value="Quotes">Quotes</option>
-            </select>
-          </div>
 
-          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  <tr>
-                    <th className="px-5 py-4">Timestamp</th>
-                    <th className="px-5 py-4">Actor</th>
-                    <th className="px-5 py-4">Action</th>
-                    <th className="px-5 py-4">Category</th>
-                    <th className="px-5 py-4">Event Details</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {filteredLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-muted/50/60 transition-colors">
-                      <td className="px-5 py-4 font-mono text-xs text-muted-foreground">{log.timestamp}</td>
-                      <td className="px-5 py-4 font-semibold text-foreground">{log.actor}</td>
-                      <td className="px-5 py-4">
-                        <span className="font-mono text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-md">
-                          {log.action}
-                        </span>
-                      </td>
-                      <td className="px-5 py-4 text-xs font-medium text-muted-foreground">{log.category}</td>
-                      <td className="px-5 py-4 text-foreground">{log.details}</td>
+            <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    <tr>
+                      <th className="px-5 py-4">Timestamp</th>
+                      <th className="px-5 py-4">Actor</th>
+                      <th className="px-5 py-4">Action</th>
+                      <th className="px-5 py-4">Category</th>
+                      <th className="px-5 py-4">Event Details</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {filteredLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-muted/50/60 transition-colors">
+                        <td className="px-5 py-4 font-mono text-xs text-muted-foreground">{log.timestamp}</td>
+                        <td className="px-5 py-4 font-semibold text-foreground">{log.actor}</td>
+                        <td className="px-5 py-4">
+                          <span className="font-mono text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-md">
+                            {log.action}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 text-xs font-medium text-muted-foreground">{log.category}</td>
+                        <td className="px-5 py-4 text-foreground">{log.details}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        ))}
 
       {/* ======================================================== */}
       {/* 12. SETTINGS TAB                                        */}
       {/* ======================================================== */}
-      {activeTab === "settings" && (
-        <div className="space-y-6 max-w-3xl animate-in fade-in-50 duration-200">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Admin & Business Settings</h1>
-            <p className="text-sm text-muted-foreground mt-1">Configure company details, Ethiopian Birr localization, and alert rules</p>
-          </div>
-
-          <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-6">
-            <h3 className="font-bold text-base text-foreground border-b border-border pb-3">
-              Company & Factory Information
-            </h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-muted-foreground">Company Name</Label>
-                <Input
-                  value={settingsData.companyName}
-                  onChange={(e) => setSettingsData({ ...settingsData, companyName: e.target.value })}
-                  className="bg-muted/50"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-muted-foreground">Support Email</Label>
-                <Input
-                  value={settingsData.supportEmail}
-                  onChange={(e) => setSettingsData({ ...settingsData, supportEmail: e.target.value })}
-                  className="bg-muted/50"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-muted-foreground">Contact Phone</Label>
-                <Input
-                  value={settingsData.phone}
-                  onChange={(e) => setSettingsData({ ...settingsData, phone: e.target.value })}
-                  className="bg-muted/50"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-muted-foreground">Default Currency</Label>
-                <Input value={settingsData.currency} disabled className="bg-muted text-muted-foreground" />
-              </div>
-              <div className="sm:col-span-2 space-y-1.5">
-                <Label className="text-xs font-semibold text-muted-foreground">Physical Address</Label>
-                <Input
-                  value={settingsData.address}
-                  onChange={(e) => setSettingsData({ ...settingsData, address: e.target.value })}
-                  className="bg-muted/50"
-                />
-              </div>
+      {activeTab === "settings" &&
+        (!hasPermission("settings.view") ? (
+          <NotAuthorized
+            userRole={user?.role}
+            message="Access Denied - Administrator privilege required."
+          />
+        ) : (
+          <div className="space-y-6 max-w-4xl animate-in fade-in-50 duration-200">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-foreground">Admin & Business Settings</h1>
+              <p className="text-sm text-muted-foreground mt-1">Configure company details, team members, and alert rules</p>
             </div>
 
-            <h3 className="font-bold text-base text-foreground border-b border-border pb-3 pt-2">
-              Notifications & Inventory Alerts
-            </h3>
+            {/* Sub-tabs */}
+            <div className="flex border-b border-border gap-4">
+              <button
+                onClick={() => setSettingsSubTab("general")}
+                className={`pb-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
+                  settingsSubTab === "general"
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Company Settings
+              </button>
+              <button
+                onClick={() => setSettingsSubTab("team")}
+                className={`pb-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer flex items-center gap-2 ${
+                  settingsSubTab === "team"
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Team Management
+              </button>
+            </div>
 
-            <div className="space-y-4 text-sm">
-              <label className="flex items-center gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={settingsData.emailOrderNotify}
-                  onChange={(e) =>
-                    setSettingsData({ ...settingsData, emailOrderNotify: e.target.checked })
-                  }
-                  className="h-4 w-4 rounded text-primary focus:ring-sky-500"
-                />
-                <span className="text-muted-foreground font-medium">Send email notification when an order is submitted</span>
-              </label>
+            {settingsSubTab === "general" ? (
+              <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-6">
+                <h3 className="font-bold text-base text-foreground border-b border-border pb-3">
+                  Company & Factory Information
+                </h3>
 
-              <div className="flex items-center justify-between max-w-sm pt-2">
-                <span className="text-muted-foreground font-medium">Low stock warning threshold:</span>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="number"
-                    value={settingsData.lowStockThreshold}
-                    onChange={(e) =>
-                      setSettingsData({
-                        ...settingsData,
-                        lowStockThreshold: Number(e.target.value) || 5,
-                      })
-                    }
-                    className="w-20 text-center h-8"
-                  />
-                  <span className="text-xs text-muted-foreground">units</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-muted-foreground">Company Name</Label>
+                    <Input
+                      value={settingsData.companyName}
+                      onChange={(e) => setSettingsData({ ...settingsData, companyName: e.target.value })}
+                      className="bg-muted/50"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-muted-foreground">Support Email</Label>
+                    <Input
+                      value={settingsData.supportEmail}
+                      onChange={(e) => setSettingsData({ ...settingsData, supportEmail: e.target.value })}
+                      className="bg-muted/50"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-muted-foreground">Contact Phone</Label>
+                    <Input
+                      value={settingsData.phone}
+                      onChange={(e) => setSettingsData({ ...settingsData, phone: e.target.value })}
+                      className="bg-muted/50"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-muted-foreground">Default Currency</Label>
+                    <Input value={settingsData.currency} disabled className="bg-muted text-muted-foreground" />
+                  </div>
+                  <div className="sm:col-span-2 space-y-1.5">
+                    <Label className="text-xs font-semibold text-muted-foreground">Physical Address</Label>
+                    <Input
+                      value={settingsData.address}
+                      onChange={(e) => setSettingsData({ ...settingsData, address: e.target.value })}
+                      className="bg-muted/50"
+                    />
+                  </div>
+                </div>
+
+                <h3 className="font-bold text-base text-foreground border-b border-border pb-3 pt-2">
+                  Notifications & Inventory Alerts
+                </h3>
+
+                <div className="space-y-4 text-sm">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={settingsData.emailOrderNotify}
+                      onChange={(e) =>
+                        setSettingsData({ ...settingsData, emailOrderNotify: e.target.checked })
+                      }
+                      className="h-4 w-4 rounded text-primary focus:ring-sky-500"
+                    />
+                    <span className="text-muted-foreground font-medium">Send email notification when an order is submitted</span>
+                  </label>
+
+                  <div className="flex items-center justify-between max-w-sm pt-2">
+                    <span className="text-muted-foreground font-medium">Low stock warning threshold:</span>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        value={settingsData.lowStockThreshold}
+                        onChange={(e) =>
+                          setSettingsData({
+                            ...settingsData,
+                            lowStockThreshold: Number(e.target.value) || 5,
+                          })
+                        }
+                        className="w-20 text-center h-8"
+                      />
+                      <span className="text-xs text-muted-foreground">units</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-border flex justify-end">
+                  <Button
+                    onClick={() => {
+                      toast.success("Settings saved successfully!");
+                    }}
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
+                  >
+                    <Save className="h-4 w-4" />
+                    Save Settings
+                  </Button>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Invite Staff Card */}
+                <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4">
+                  <div className="flex items-center justify-between border-b border-border pb-3">
+                    <div>
+                      <h3 className="font-bold text-base text-foreground">Add New Staff Member</h3>
+                      <p className="text-xs text-muted-foreground">
+                        Staff accounts will be required to change their temporary password upon first login.
+                      </p>
+                    </div>
+                  </div>
 
-            <div className="pt-4 border-t border-border flex justify-end">
-              <Button
-                onClick={() => {
-                  toast.success("Settings saved successfully!");
-                }}
-                className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
-              >
-                <Save className="h-4 w-4" />
-                Save Settings
-              </Button>
-            </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Full Name *</Label>
+                      <Input
+                        placeholder="e.g. Samuel Desta"
+                        value={newTeamMember.name}
+                        onChange={(e) => setNewTeamMember({ ...newTeamMember, name: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Email Address *</Label>
+                      <Input
+                        type="email"
+                        placeholder="staff@polarfiber.com"
+                        value={newTeamMember.email}
+                        onChange={(e) => setNewTeamMember({ ...newTeamMember, email: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Phone Number</Label>
+                      <Input
+                        placeholder="+251 911 000 000"
+                        value={newTeamMember.phone}
+                        onChange={(e) => setNewTeamMember({ ...newTeamMember, phone: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Role *</Label>
+                      <select
+                        value={newTeamMember.role}
+                        onChange={(e) => setNewTeamMember({ ...newTeamMember, role: e.target.value as "staff" | "admin" })}
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                      >
+                        <option value="staff">Staff Member</option>
+                        <option value="admin">Administrator</option>
+                      </select>
+                    </div>
+                    <div className="sm:col-span-2 space-y-1.5">
+                      <Label className="text-xs font-semibold">Temporary Password *</Label>
+                      <Input
+                        type="text"
+                        placeholder="Temporary password (min 6 characters)"
+                        value={newTeamMember.temporaryPassword}
+                        onChange={(e) => setNewTeamMember({ ...newTeamMember, temporaryPassword: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end pt-2">
+                    <Button
+                      disabled={
+                        creatingMember ||
+                        !newTeamMember.name.trim() ||
+                        !newTeamMember.email.trim() ||
+                        newTeamMember.temporaryPassword.length < 6
+                      }
+                      onClick={async () => {
+                        setCreatingMember(true);
+                        try {
+                          await mutateCreateTeamMember({
+                            data: {
+                              name: newTeamMember.name.trim(),
+                              email: newTeamMember.email.trim(),
+                              phone: newTeamMember.phone.trim(),
+                              role: newTeamMember.role,
+                              temporaryPassword: newTeamMember.temporaryPassword,
+                            },
+                          });
+                          toast.success(`Staff account for ${newTeamMember.name} created!`);
+                          setNewTeamMember({
+                            name: "",
+                            email: "",
+                            phone: "",
+                            role: "staff",
+                            temporaryPassword: "",
+                          });
+                          customersQuery.refetch();
+                        } catch (err) {
+                          toast.error(err instanceof Error ? err.message : "Failed to create team member");
+                        } finally {
+                          setCreatingMember(false);
+                        }
+                      }}
+                      className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
+                    >
+                      <UserPlus className="h-4 w-4" />
+                      {creatingMember ? "Creating..." : "Create Staff Account"}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Team Members List */}
+                <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4">
+                  <h3 className="font-bold text-base text-foreground border-b border-border pb-3">
+                    Active Team Members & Roles
+                  </h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                        <tr>
+                          <th className="px-4 py-3">Member</th>
+                          <th className="px-4 py-3">Email</th>
+                          <th className="px-4 py-3">Role</th>
+                          <th className="px-4 py-3">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {allCustomers
+                          .filter((c) => c.role === "admin" || c.role === "staff")
+                          .map((m) => (
+                            <tr key={m.user_id}>
+                              <td className="px-4 py-3 font-semibold text-foreground">{m.name}</td>
+                              <td className="px-4 py-3 text-muted-foreground">{m.email}</td>
+                              <td className="px-4 py-3">
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
+                                    m.role === "admin"
+                                      ? "bg-primary/15 text-primary"
+                                      : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                                  }`}
+                                >
+                                  {m.role}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-xs text-emerald-600 font-semibold">Active</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        ))}
 
       {/* ======================================================== */}
       {/* MODALS & DRAWERS                                         */}
@@ -2131,6 +2724,18 @@ export function AdminDashboard() {
         mode="admin"
         onStatusChange={handleOrderStatusChange}
         statusUpdating={statusUpdating}
+        onAddNote={async (orderId, note) => {
+          try {
+            const res = await mutateAddOrderNote({ data: { order_id: orderId, note } });
+            toast.success("Internal note added");
+            if (selectedOrder && selectedOrder.order_id === orderId) {
+              setSelectedOrder({ ...selectedOrder, internal_notes: res.notes });
+            }
+            await ordersQuery.refetch();
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Failed to add internal note");
+          }
+        }}
       />
 
       {/* Product Add/Edit Dialog */}

@@ -14,6 +14,8 @@ import { Label } from "@/frontend/components/ui/label";
 import { Textarea } from "@/frontend/components/ui/textarea";
 import { CATEGORIES, type Category, type Product } from "@/shared/data";
 import { ImageIcon } from "lucide-react";
+import { usePermissions } from "@/frontend/hooks/usePermissions";
+import { cn } from "@/frontend/utils";
 
 const productSchema = z.object({
   product_id: z.number().int().min(0),
@@ -44,6 +46,8 @@ export function ProductDialog({
   onSave,
   loading = false,
 }: ProductDialogProps) {
+  const { hasPermission, role } = usePermissions();
+  const canUpdatePrice = role === "admin" || hasPermission("products.update_price");
   const [form, setForm] = React.useState<Product>({
     product_id: 0,
     name: "",
@@ -158,16 +162,17 @@ export function ProductDialog({
 
             {/* Price */}
             <div>
-              <Label htmlFor="price">Price (ETB) *</Label>
+              <Label htmlFor="price">Price (ETB) * {!canUpdatePrice && <span className="text-xs text-muted-foreground font-normal">(Read-only for staff)</span>}</Label>
               <Input
                 id="price"
                 type="number"
                 min="0"
                 step="any"
                 placeholder="0.00"
+                disabled={!canUpdatePrice}
                 value={form.price || ""}
                 onChange={(e) => setForm({ ...form, price: Number(e.target.value) })}
-                className="mt-1"
+                className={cn("mt-1", !canUpdatePrice && "bg-muted cursor-not-allowed")}
               />
               {errors.price && <p className="mt-1 text-xs text-destructive">{errors.price}</p>}
             </div>

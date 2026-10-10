@@ -19,12 +19,20 @@ export type Product = {
 };
 
 export type Role = "customer" | "admin" | "staff";
-export type User = { user_id: number; name: string; email: string; phone: string; role: Role };
+export type User = {
+  user_id: number;
+  name: string;
+  email: string;
+  phone: string;
+  role: Role;
+  must_change_password?: boolean;
+};
 
 export const ORDER_STATUSES = [
   "Pending",
   "Confirmed",
   "In Production",
+  "Out for Delivery",
   "Delivered",
   "Cancelled",
 ] as const;
@@ -43,10 +51,19 @@ export type Order = {
   total: number;
   status: OrderStatus;
   address: string;
+  is_paid?: boolean | number;
+  payment_method?: string;
+  internal_notes?: string | null;
   created_at: string;
 };
 
-export const QUOTE_STATUSES = ["New", "Replied", "Closed"] as const;
+export const QUOTE_STATUSES = [
+  "New",
+  "Reviewing",
+  "Pending Approval",
+  "Replied",
+  "Closed",
+] as const;
 export type QuoteStatus = (typeof QUOTE_STATUSES)[number];
 export type Quote = {
   quote_id: number;
@@ -55,8 +72,53 @@ export type Quote = {
   email: string;
   subject: string;
   message: string;
+  quoted_amount?: number | null;
+  valid_until?: string | null;
+  assigned_to?: number | null;
   status: QuoteStatus;
   created_at: string;
+};
+
+export type StockAdjustment = {
+  id: number;
+  product_id: number;
+  product_name?: string;
+  quantity: number;
+  reason: string;
+  status: "pending_approval" | "approved" | "rejected";
+  staff_id: number;
+  staff_name?: string;
+  reviewed_by?: number | null;
+  reviewed_at?: string | null;
+  created_at: string;
+};
+
+export type ContactMessage = {
+  id: number;
+  name: string;
+  email: string;
+  phone?: string | null;
+  subject: string;
+  message: string;
+  is_read: boolean | number;
+  is_archived: boolean | number;
+  created_at: string;
+};
+
+export type SupportTicket = {
+  id: number;
+  ticket_code: string;
+  customer_name: string;
+  customer_email: string;
+  subject: string;
+  category: string;
+  priority: "Low" | "Normal" | "High" | "Urgent";
+  status: "Open" | "In Progress" | "Resolved";
+  assigned_to?: number | null;
+  assigned_name?: string | null;
+  internal_notes?: string | null;
+  created_at: string;
+  updated_at?: string;
 };
 
 export const etb = (n: number) => `ETB ${Number(n).toLocaleString("en-US")}`;
@@ -163,4 +225,6 @@ export type AuditLog = {
   new_values?: string | Record<string, unknown> | null;
   created_at: string;
 };
+
+export * from "./permissions";
 

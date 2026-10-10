@@ -44,8 +44,69 @@ if (!colNames.has("locked_until")) {
   await c.query("ALTER TABLE users ADD COLUMN locked_until DATETIME NULL");
 }
 
+if (!colNames.has("role")) {
+  await c.query("ALTER TABLE users ADD COLUMN role ENUM('admin','staff','customer') NOT NULL DEFAULT 'customer'");
+  // Sync roles from user_roles
+  try {
+    await c.query(`
+      UPDATE users u
+      JOIN user_roles r ON u.user_id = r.user_id
+      SET u.role = r.role
+    `);
+  } catch {}
+} else {
+  try {
+    await c.query("ALTER TABLE users MODIFY COLUMN role ENUM('admin','staff','customer') NOT NULL DEFAULT 'customer'");
+  } catch {}
+}
+
+if (!colNames.has("must_change_password")) {
+  await c.query("ALTER TABLE users ADD COLUMN must_change_password TINYINT(1) NOT NULL DEFAULT 0");
+}
+
 try {
   await c.query("ALTER TABLE user_roles MODIFY COLUMN role ENUM('customer','admin','staff') NOT NULL");
+} catch {}
+
+// Ensure orders table columns
+const [orderCols] = await c.query("SHOW COLUMNS FROM orders");
+const orderColNames = new Set(orderCols.map((r) => r.Field));
+if (!orderColNames.has("is_paid")) {
+  await c.query("ALTER TABLE orders ADD COLUMN is_paid TINYINT(1) NOT NULL DEFAULT 0");
+}
+if (!orderColNames.has("payment_method")) {
+  await c.query("ALTER TABLE orders ADD COLUMN payment_method VARCHAR(50) NOT NULL DEFAULT 'cash_on_delivery'");
+}
+if (!orderColNames.has("internal_notes")) {
+  await c.query("ALTER TABLE orders ADD COLUMN internal_notes TEXT NULL");
+}
+try {
+  await c.query("ALTER TABLE orders MODIFY COLUMN status ENUM('Pending','Confirmed','In Production','Out for Delivery','Delivered','Cancelled') NOT NULL DEFAULT 'Pending'");
+} catch {}
+
+// Ensure quote_requests table columns
+const [quoteCols] = await c.query("SHOW COLUMNS FROM quote_requests");
+const quoteColNames = new Set(quoteCols.map((r) => r.Field));
+if (!quoteColNames.has("quoted_amount")) {
+  await c.query("ALTER TABLE quote_requests ADD COLUMN quoted_amount DECIMAL(12,2) NULL");
+}
+if (!quoteColNames.has("valid_until")) {
+  await c.query("ALTER TABLE quote_requests ADD COLUMN valid_until DATETIME NULL");
+}
+if (!quoteColNames.has("assigned_to")) {
+  await c.query("ALTER TABLE quote_requests ADD COLUMN assigned_to INT NULL");
+}
+try {
+  await c.query("ALTER TABLE quote_requests MODIFY COLUMN status ENUM('New','Reviewing','Pending Approval','Replied','Closed') NOT NULL DEFAULT 'New'");
+} catch {}
+
+// Seed app_settings if needed
+try {
+  await c.query(`
+    INSERT IGNORE INTO app_settings (setting_key, setting_value, description) VALUES
+    ('stock_adjust_limit', '50', 'Maximum stock adjustment quantity a staff member can make without admin approval'),
+    ('staff_quote_limit', '100000', 'Maximum quote response amount in ETB a staff member can offer without admin approval')
+  `);
 } catch {}
 
 // Ensure a staff account exists for operational staff access

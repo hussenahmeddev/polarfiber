@@ -20,27 +20,29 @@ import {
 } from "lucide-react";
 import { useStore } from "@/frontend/store";
 import { cn } from "@/frontend/utils";
+import { usePermissions } from "@/frontend/hooks/usePermissions";
 
 export interface NavItemDef {
   id: string;
   label: string;
   icon: React.ElementType;
+  permission?: string;
   badge?: string | number | undefined;
 }
 
 export const ADMIN_NAV_ITEMS: NavItemDef[] = [
-  { id: "overview", label: "Overview", icon: LayoutDashboard },
-  { id: "products", label: "Products", icon: Package },
-  { id: "categories", label: "Categories", icon: Layers },
-  { id: "inventory", label: "Inventory", icon: Boxes },
-  { id: "orders", label: "Orders", icon: ShoppingCart },
-  { id: "quotes", label: "Quotes", icon: FileText },
-  { id: "customers", label: "Customers", icon: Users },
-  { id: "messages", label: "Messages", icon: MessageSquare },
-  { id: "support", label: "Support", icon: HelpCircle },
-  { id: "reports", label: "Reports", icon: BarChart2 },
-  { id: "audit-logs", label: "Audit Logs", icon: ScrollText },
-  { id: "settings", label: "Settings", icon: Settings },
+  { id: "overview", label: "Overview", icon: LayoutDashboard, permission: "dashboard.view" },
+  { id: "products", label: "Products", icon: Package, permission: "products.view" },
+  { id: "categories", label: "Categories", icon: Layers, permission: "categories.view" },
+  { id: "inventory", label: "Inventory", icon: Boxes, permission: "inventory.view" },
+  { id: "orders", label: "Orders", icon: ShoppingCart, permission: "orders.view" },
+  { id: "quotes", label: "Quotes", icon: FileText, permission: "quotes.view" },
+  { id: "customers", label: "Customers", icon: Users, permission: "customers.view" },
+  { id: "messages", label: "Messages", icon: MessageSquare, permission: "messages.view" },
+  { id: "support", label: "Support", icon: HelpCircle, permission: "support.view" },
+  { id: "reports", label: "Reports", icon: BarChart2, permission: "reports.view" },
+  { id: "audit-logs", label: "Audit Logs", icon: ScrollText, permission: "audit.view" },
+  { id: "settings", label: "Settings", icon: Settings, permission: "profile.update" },
 ];
 
 interface AdminSidebarLayoutProps {
@@ -57,13 +59,23 @@ export function AdminSidebarLayout({
   badges = {},
 }: AdminSidebarLayoutProps) {
   const { user, logout } = useStore();
+  const { hasPermission } = usePermissions();
   const nav = useNavigate();
   const [mobileOpen, setMobileOpen] = React.useState(false);
+
+  // Dynamically filter sidebar items based on GET /api/auth/permissions
+  const visibleNavItems = ADMIN_NAV_ITEMS.filter((item) => {
+    if (!item.permission) return true;
+    return hasPermission(item.permission);
+  });
 
   const handleSignOut = async () => {
     await logout();
     nav({ to: "/", replace: true });
   };
+
+  const isStaff = user?.role === "staff";
+  const consoleTitle = isStaff ? "Staff Console" : "Admin Console";
 
   return (
     <div className="flex min-h-screen bg-background text-foreground antialiased">
@@ -72,13 +84,15 @@ export function AdminSidebarLayout({
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
-            className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted"
+            className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted cursor-pointer"
             aria-label="Toggle Navigation Menu"
           >
             {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
           <img src="/images/logo.png" alt="Polar Fiber" className="h-7 w-auto object-contain" />
-          <span className="font-bold text-sm text-sidebar-foreground">Polar Fiber Admin</span>
+          <span className="font-bold text-sm text-sidebar-foreground">
+            Polar Fiber {isStaff ? "Staff" : "Admin"}
+          </span>
         </div>
         <Link
           to="/"
@@ -111,20 +125,22 @@ export function AdminSidebarLayout({
               <img src="/images/logo.png" alt="Polar Fiber" className="h-9 w-auto object-contain" />
               <div>
                 <p className="text-sm font-bold leading-tight text-sidebar-foreground">Polar Fiber</p>
-                <p className="text-[11px] font-semibold text-sidebar-primary tracking-wide uppercase">Admin Console</p>
+                <p className="text-[11px] font-semibold text-sidebar-primary tracking-wide uppercase">
+                  {consoleTitle}
+                </p>
               </div>
             </Link>
             <button
               onClick={() => setMobileOpen(false)}
-              className="lg:hidden p-1 text-sidebar-foreground/50 hover:text-sidebar-foreground"
+              className="lg:hidden p-1 text-sidebar-foreground/50 hover:text-sidebar-foreground cursor-pointer"
             >
               <X className="h-5 w-5" />
             </button>
           </div>
 
-          {/* Navigation Items List (12 items) */}
+          {/* Dynamic Navigation Items List based on permissions */}
           <nav className="space-y-0.5 pt-2">
-            {ADMIN_NAV_ITEMS.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
               const badge = badges[item.id] ?? item.badge;
@@ -147,7 +163,9 @@ export function AdminSidebarLayout({
                     <Icon
                       className={cn(
                         "h-4 w-4 shrink-0 transition-transform group-hover:scale-105",
-                        isActive ? "text-sidebar-accent-foreground" : "text-sidebar-foreground/40 group-hover:text-sidebar-accent-foreground",
+                        isActive
+                          ? "text-sidebar-accent-foreground"
+                          : "text-sidebar-foreground/40 group-hover:text-sidebar-accent-foreground",
                       )}
                     />
                     <span>{item.label}</span>
@@ -156,7 +174,9 @@ export function AdminSidebarLayout({
                     <span
                       className={cn(
                         "rounded-full px-2 py-0.5 text-[11px] font-bold",
-                        isActive ? "bg-sidebar-accent/60 text-sidebar-accent-foreground" : "bg-sidebar-border text-sidebar-foreground/70",
+                        isActive
+                          ? "bg-sidebar-accent/60 text-sidebar-accent-foreground"
+                          : "bg-sidebar-border text-sidebar-foreground/70",
                       )}
                     >
                       {badge}
@@ -179,23 +199,44 @@ export function AdminSidebarLayout({
             <span>Storefront</span>
           </Link>
 
-          {/* User Capsule */}
+          {/* User Capsule with Role Badge */}
           <div className="flex items-center justify-between rounded-xl bg-sidebar-accent/30 p-2.5 border border-sidebar-border">
             <div className="flex items-center gap-2.5 min-w-0 pr-1">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary font-bold text-xs text-sidebar-primary-foreground">
-                {user?.name?.charAt(0).toUpperCase() ?? "A"}
+              <div
+                className={cn(
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg font-bold text-xs",
+                  isStaff
+                    ? "bg-amber-500 text-amber-950 font-extrabold"
+                    : "bg-sidebar-primary text-sidebar-primary-foreground",
+                )}
+              >
+                {user?.name?.charAt(0).toUpperCase() ?? "U"}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-semibold text-sidebar-foreground leading-tight">
-                  {user?.name ?? "Administrator"}
+                  {user?.name ?? "User"}
                 </p>
-                <p className="truncate text-[10px] text-sidebar-foreground/60">{user?.email}</p>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span
+                    className={cn(
+                      "px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider",
+                      user?.role === "admin"
+                        ? "bg-primary/20 text-primary border border-primary/30"
+                        : user?.role === "staff"
+                          ? "bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30"
+                          : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {user?.role === "staff" ? "Staff" : user?.role === "admin" ? "Admin" : "Customer"}
+                  </span>
+                  <p className="truncate text-[10px] text-sidebar-foreground/60">{user?.email}</p>
+                </div>
               </div>
             </div>
             <button
               onClick={handleSignOut}
               title="Sign out"
-              className="p-1.5 text-sidebar-foreground/50 hover:text-destructive hover:bg-destructive/10 rounded-md transition-colors"
+              className="p-1.5 text-sidebar-foreground/50 hover:text-destructive hover:bg-destructive/10 rounded-md transition-colors cursor-pointer"
             >
               <LogOut className="h-4 w-4" />
             </button>

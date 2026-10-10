@@ -24,8 +24,10 @@ import {
   ShoppingBag,
   RotateCcw,
   User,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/frontend/utils";
+import { Can } from "@/frontend/components/Can";
 
 interface OrderDrawerProps {
   order: Order | null;
@@ -35,20 +37,23 @@ interface OrderDrawerProps {
   onReorder?: (order: Order) => void;
   onStatusChange?: (orderId: number, status: OrderStatus) => void;
   statusUpdating?: boolean;
+  onAddNote?: (orderId: number, note: string) => Promise<void>;
 }
 
 const STEPS: { status: OrderStatus; label: string; icon: React.ElementType }[] = [
   { status: "Pending", label: "Pending", icon: Clock },
   { status: "Confirmed", label: "Confirmed", icon: CheckCircle2 },
   { status: "In Production", label: "In Production", icon: Factory },
-  { status: "Delivered", label: "Delivered", icon: Truck },
+  { status: "Out for Delivery", label: "Out for Delivery", icon: Truck },
+  { status: "Delivered", label: "Delivered", icon: CheckCircle2 },
 ];
 
 const STEP_INDEX_MAP: Record<OrderStatus, number> = {
   Pending: 0,
   Confirmed: 1,
   "In Production": 2,
-  Delivered: 3,
+  "Out for Delivery": 3,
+  Delivered: 4,
   Cancelled: -1,
 };
 
@@ -60,7 +65,11 @@ export function OrderDrawer({
   onReorder,
   onStatusChange,
   statusUpdating = false,
+  onAddNote,
 }: OrderDrawerProps) {
+  const [noteInput, setNoteInput] = React.useState("");
+  const [noteSubmitting, setNoteSubmitting] = React.useState(false);
+
   if (!order) return null;
 
   const isCancelled = order.status === "Cancelled";
@@ -206,6 +215,65 @@ export function OrderDrawer({
               {etb(order.total)}
             </span>
           </div>
+
+          {/* Internal Notes (Admin & Staff Only) */}
+          {mode === "admin" && (
+            <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
+              <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <FileText className="h-3.5 w-3.5 text-primary" />
+                Staff Internal Notes (Confidential)
+              </span>
+              {order.internal_notes ? (
+                <div className="rounded-lg bg-background p-3 text-xs text-foreground font-mono whitespace-pre-wrap max-h-36 overflow-y-auto border border-border/60">
+                  {order.internal_notes}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground italic">No internal notes added yet.</p>
+              )}
+              {onAddNote && (
+                <div className="flex gap-2 pt-1">
+                  <input
+                    type="text"
+                    placeholder="Add confidential internal note..."
+                    value={noteInput}
+                    onChange={(e) => setNoteInput(e.target.value)}
+                    className="flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter" && noteInput.trim()) {
+                        e.preventDefault();
+                        const txt = noteInput.trim();
+                        setNoteInput("");
+                        setNoteSubmitting(true);
+                        try {
+                          await onAddNote(order.order_id, txt);
+                        } finally {
+                          setNoteSubmitting(false);
+                        }
+                      }
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={noteSubmitting || !noteInput.trim()}
+                    onClick={async () => {
+                      const txt = noteInput.trim();
+                      setNoteInput("");
+                      setNoteSubmitting(true);
+                      try {
+                        await onAddNote(order.order_id, txt);
+                      } finally {
+                        setNoteSubmitting(false);
+                      }
+                    }}
+                    className="text-xs h-8 px-3"
+                  >
+                    {noteSubmitting ? "Saving..." : "Add Note"}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer Actions */}
@@ -242,13 +310,38 @@ export function OrderDrawer({
             </div>
           )}
 
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            className="w-full sm:w-auto sm:ml-auto"
-          >
-            Close
-          </Button>
+          <div className="flex items-center gap-2 w-full sm:w-auto sm:ml-auto">
+            {mode === "admin" && (
+              <>
+                <Can permission="orders.refund">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs text-rose-600 border-rose-200 hover:bg-rose-50"
+                  >
+                    Refund Order
+                  </Button>
+                </Can>
+                <Can permission="orders.delete">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs text-rose-600 border-rose-200 hover:bg-rose-50"
+                  >
+                    Delete Order
+                  </Button>
+                </Can>
+              </>
+            )}
+
+            <Button
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              className="w-full sm:w-auto"
+            >
+              Close
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

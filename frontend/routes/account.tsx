@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { CustomerDashboard } from "@/frontend/components/CustomerDashboard";
+import { ProtectedRoute } from "@/frontend/components/ProtectedRoute";
 
 export const Route = createFileRoute("/account")({
   head: () => ({
@@ -13,5 +14,13 @@ export const Route = createFileRoute("/account")({
       { property: "og:description", content: "Track your orders, quotes, and profile." },
     ],
   }),
-  component: CustomerDashboard,
+  component: AccountPage,
 });
+
+function AccountPage() {
+  return (
+    <ProtectedRoute roles={["customer", "admin", "staff"]}>
+      <CustomerDashboard />
+    </ProtectedRoute>
+  );
+}

@@ -2,6 +2,7 @@ import { createHmac, createHash, timingSafeEqual, randomBytes } from "node:crypt
 import { getCookie, setCookie, deleteCookie } from "@tanstack/react-start/server";
 import { withDb, rows } from "./db.server";
 import type { User, Role } from "../shared/data";
+import { hasPermission } from "../shared/permissions";
 
 // ─── Legacy HMAC session (kept for backward compat) ───────────────────────────
 const COOKIE = "pf_session";
@@ -152,26 +153,89 @@ export function verifyAccessToken(): { uid: number } | null {
   }
 }
 
+export function parseUserIdFromCookieHeader(cookieHeader: string | null | undefined): number | null {
+  if (!cookieHeader) return null;
+  const cookies: Record<string, string> = {};
+  for (const pair of cookieHeader.split(";")) {
+    const [k, ...v] = pair.trim().split("=");
+    if (k) cookies[k] = v.join("=");
+  }
+  const access = cookies[ACCESS_COOKIE];
+  if (access) {
+    const parts = access.split(".");
+    if (parts.length === 3) {
+      const [header, body, sig] = parts as [string, string, string];
+      const expected = createHmac("sha256", jwtSecret())
+        .update(`${header}.${body}`)
+        .digest("base64url");
+      const expectedBuf = Buffer.from(expected);
+      const sigBuf = Buffer.from(sig);
+      if (expectedBuf.length === sigBuf.length && timingSafeEqual(expectedBuf, sigBuf)) {
+        try {
+          const payload = JSON.parse(Buffer.from(body, "base64url").toString()) as {
+            uid: number;
+            exp: number;
+          };
+          const now = Math.floor(Date.now() / 1000);
+          if (payload.exp && payload.exp >= now) {
+            return Number(payload.uid);
+          }
+        } catch {}
+      }
+    }
+  }
+  const session = cookies[COOKIE];
+  if (session) {
+    const [payload, sig] = session.split(".");
+    if (payload && sig) {
+      const a = Buffer.from(sig);
+      const b = Buffer.from(sign(payload));
+      if (a.length === b.length && timingSafeEqual(a, b)) {
+        try {
+          const d = JSON.parse(Buffer.from(payload, "base64url").toString());
+          if (d.exp > Date.now()) return Number(d.uid);
+        } catch {}
+      }
+    }
+  }
+  return null;
+}
+
 // ─── User loading ──────────────────────────────────────────────────────────────
 export type SessionUser = User;
 
 export async function loadUser(uid: number): Promise<SessionUser | null> {
   return withDb(async (c) => {
-    type DbUser = User & { is_active?: number };
+    type DbUser = {
+      user_id: number;
+      name: string;
+      email: string;
+      phone: string;
+      role: Role;
+      must_change_password: number | boolean;
+      is_active?: number;
+    };
     const r = await rows<DbUser>(
       c,
       `SELECT u.user_id,u.name,u.email,u.phone,
-        CASE
-          WHEN EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='admin') THEN 'admin'
-          WHEN EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='staff') THEN 'staff'
-          ELSE 'customer'
-        END AS role
+        COALESCE(
+          u.role,
+          CASE
+            WHEN EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='admin') THEN 'admin'
+            WHEN EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='staff') THEN 'staff'
+            ELSE 'customer'
+          END
+        ) AS role,
+        COALESCE(u.must_change_password, 0) AS must_change_password
        FROM users u WHERE u.user_id=?`,
       [uid],
     );
     if (!r[0]) return null;
     const { is_active: _active, ...user } = r[0];
-    return user as User;
+    return {
+      ...user,
+      must_change_password: Boolean(user.must_change_password),
+    };
   });
 }
 
@@ -200,13 +264,17 @@ export async function requireAuth(): Promise<{ uid: number; role: Role }> {
   throw Object.assign(new Error("Unauthorized"), { status: 401 });
 }
 
+export function assertRole(role: Role, ...roles: Role[]): void {
+  if (!roles.includes(role)) {
+    throw Object.assign(new Error("Forbidden"), { status: 403 });
+  }
+}
+
 export async function requireRole(
   ...roles: Role[]
 ): Promise<{ uid: number; role: Role }> {
   const auth = await requireAuth();
-  if (!roles.includes(auth.role)) {
-    throw Object.assign(new Error("Forbidden"), { status: 403 });
-  }
+  assertRole(auth.role, ...roles);
   return auth;
 }
 
@@ -216,16 +284,59 @@ export async function requireUser(): Promise<SessionUser> {
   return u;
 }
 
+export function assertAdmin(u: SessionUser): void {
+  if (u.role !== "admin") {
+    throw Object.assign(new Error("Admins only."), { status: 403 });
+  }
+  if (u.must_change_password) {
+    throw Object.assign(
+      new Error("Temporary password change required before accessing the management system."),
+      { status: 403 },
+    );
+  }
+}
+
 export async function requireAdmin(): Promise<SessionUser> {
   const u = await requireUser();
-  if (u.role !== "admin") throw new Error("Admins only.");
+  assertAdmin(u);
   return u;
+}
+
+export function assertStaffOrAdmin(u: SessionUser): void {
+  if (u.role !== "admin" && u.role !== "staff") {
+    throw Object.assign(new Error("Staff or administrator access required."), { status: 403 });
+  }
+  if (u.must_change_password) {
+    throw Object.assign(
+      new Error("Temporary password change required before accessing the management system."),
+      { status: 403 },
+    );
+  }
 }
 
 export async function requireStaffOrAdmin(): Promise<SessionUser> {
   const u = await requireUser();
-  if (u.role !== "admin" && u.role !== "staff") {
-    throw new Error("Staff or administrator access required.");
+  assertStaffOrAdmin(u);
+  return u;
+}
+
+export function assertPermission(user: SessionUser, permission: string): void {
+  if (user.must_change_password) {
+    throw Object.assign(
+      new Error("Temporary password change required before accessing the management system."),
+      { status: 403 },
+    );
   }
+  if (!hasPermission(user.role, permission)) {
+    throw Object.assign(
+      new Error(`Forbidden: missing permission '${permission}'`),
+      { status: 403 },
+    );
+  }
+}
+
+export async function requirePermission(permission: string): Promise<SessionUser> {
+  const u = await requireUser();
+  assertPermission(u, permission);
   return u;
 }
