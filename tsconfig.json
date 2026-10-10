@@ -4,6 +4,8 @@
     "frontend/**/*.tsx",
     "backend/**/*.ts",
     "shared/**/*.ts",
+    "utils/**/*.ts",
+    "utils/**/*.js",
     "vite.config.ts",
     "vitest.config.ts",
     "eslint.config.js"

@@ -66,23 +66,23 @@ export function AdminSidebarLayout({
   };
 
   return (
-    <div className="flex min-h-screen bg-[#f8fafc] text-slate-800 antialiased">
+    <div className="flex min-h-screen bg-background text-foreground antialiased">
       {/* Mobile Top Header */}
-      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur-md lg:hidden">
+      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-sidebar-border bg-sidebar/95 px-4 py-3 backdrop-blur-md lg:hidden">
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
-            className="p-1.5 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100"
+            className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted"
             aria-label="Toggle Navigation Menu"
           >
             {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
           <img src="/images/logo.png" alt="Polar Fiber" className="h-7 w-auto object-contain" />
-          <span className="font-bold text-sm text-slate-900">Polar Fiber Admin</span>
+          <span className="font-bold text-sm text-sidebar-foreground">Polar Fiber Admin</span>
         </div>
         <Link
           to="/"
-          className="inline-flex items-center gap-1.5 text-xs font-semibold text-sky-600 hover:text-sky-700 bg-sky-50 px-2.5 py-1 rounded-lg"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-sidebar-primary hover:text-sidebar-primary/80 bg-sidebar-primary/10 px-2.5 py-1 rounded-lg"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           Store
@@ -100,7 +100,7 @@ export function AdminSidebarLayout({
       {/* Sidebar (Desktop sticky + Mobile slide-over) */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-60 shrink-0 flex-col justify-between border-r border-slate-100 bg-white p-4 transition-transform duration-200 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:overflow-y-auto",
+          "fixed inset-y-0 left-0 z-50 flex w-60 shrink-0 flex-col justify-between border-r border-sidebar-border bg-sidebar p-4 transition-transform duration-200 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:overflow-y-auto",
           mobileOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full lg:translate-x-0",
         )}
       >
@@ -110,13 +110,13 @@ export function AdminSidebarLayout({
             <Link to="/" className="flex items-center gap-3">
               <img src="/images/logo.png" alt="Polar Fiber" className="h-9 w-auto object-contain" />
               <div>
-                <p className="text-sm font-bold leading-tight text-slate-900">Polar Fiber</p>
-                <p className="text-[11px] font-semibold text-sky-600 tracking-wide uppercase">Admin Console</p>
+                <p className="text-sm font-bold leading-tight text-sidebar-foreground">Polar Fiber</p>
+                <p className="text-[11px] font-semibold text-sidebar-primary tracking-wide uppercase">Admin Console</p>
               </div>
             </Link>
             <button
               onClick={() => setMobileOpen(false)}
-              className="lg:hidden p-1 text-slate-400 hover:text-slate-600"
+              className="lg:hidden p-1 text-sidebar-foreground/50 hover:text-sidebar-foreground"
             >
               <X className="h-5 w-5" />
             </button>
@@ -139,15 +139,15 @@ export function AdminSidebarLayout({
                   className={cn(
                     "group flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all duration-150 cursor-pointer text-left",
                     isActive
-                      ? "bg-sky-50 text-sky-600 font-semibold shadow-2xs"
-                      : "text-slate-600 hover:bg-slate-50/80 hover:text-slate-900",
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-2xs"
+                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
                   )}
                 >
                   <div className="flex items-center gap-3">
                     <Icon
                       className={cn(
                         "h-4 w-4 shrink-0 transition-transform group-hover:scale-105",
-                        isActive ? "text-sky-600" : "text-slate-400 group-hover:text-slate-600",
+                        isActive ? "text-sidebar-accent-foreground" : "text-sidebar-foreground/40 group-hover:text-sidebar-accent-foreground",
                       )}
                     />
                     <span>{item.label}</span>
@@ -156,7 +156,7 @@ export function AdminSidebarLayout({
                     <span
                       className={cn(
                         "rounded-full px-2 py-0.5 text-[11px] font-bold",
-                        isActive ? "bg-sky-200/60 text-sky-700" : "bg-slate-100 text-slate-600",
+                        isActive ? "bg-sidebar-accent/60 text-sidebar-accent-foreground" : "bg-sidebar-border text-sidebar-foreground/70",
                       )}
                     >
                       {badge}
@@ -169,33 +169,33 @@ export function AdminSidebarLayout({
         </div>
 
         {/* Sidebar Footer */}
-        <div className="space-y-3 border-t border-slate-100 pt-3">
+        <div className="space-y-3 border-t border-sidebar-border pt-3">
           {/* Back to Storefront Link */}
           <Link
             to="/"
-            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"
           >
-            <ArrowLeft className="h-3.5 w-3.5 text-slate-400" />
+            <ArrowLeft className="h-3.5 w-3.5 text-sidebar-foreground/40" />
             <span>Storefront</span>
           </Link>
 
           {/* User Capsule */}
-          <div className="flex items-center justify-between rounded-xl bg-slate-50 p-2.5 border border-slate-100">
+          <div className="flex items-center justify-between rounded-xl bg-sidebar-accent/30 p-2.5 border border-sidebar-border">
             <div className="flex items-center gap-2.5 min-w-0 pr-1">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-600 font-bold text-xs text-white">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary font-bold text-xs text-sidebar-primary-foreground">
                 {user?.name?.charAt(0).toUpperCase() ?? "A"}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-semibold text-slate-900 leading-tight">
+                <p className="truncate text-xs font-semibold text-sidebar-foreground leading-tight">
                   {user?.name ?? "Administrator"}
                 </p>
-                <p className="truncate text-[10px] text-slate-500">{user?.email}</p>
+                <p className="truncate text-[10px] text-sidebar-foreground/60">{user?.email}</p>
               </div>
             </div>
             <button
               onClick={handleSignOut}
               title="Sign out"
-              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
+              className="p-1.5 text-sidebar-foreground/50 hover:text-destructive hover:bg-destructive/10 rounded-md transition-colors"
             >
               <LogOut className="h-4 w-4" />
             </button>

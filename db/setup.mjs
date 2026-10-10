@@ -26,6 +26,27 @@ const c = await mysql.createConnection({
 });
 await c.query(fs.readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
 
+// Ensure users table has recent auth columns
+const [cols] = await c.query("SHOW COLUMNS FROM users");
+const colNames = new Set(cols.map((r) => r.Field));
+
+if (!colNames.has("is_active")) {
+  await c.query("ALTER TABLE users ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1");
+}
+if (!colNames.has("email_verified_at")) {
+  await c.query("ALTER TABLE users ADD COLUMN email_verified_at DATETIME NULL");
+}
+if (!colNames.has("failed_attempts")) {
+  await c.query("ALTER TABLE users ADD COLUMN failed_attempts INT NOT NULL DEFAULT 0");
+}
+if (!colNames.has("locked_until")) {
+  await c.query("ALTER TABLE users ADD COLUMN locked_until DATETIME NULL");
+}
+
+try {
+  await c.query("ALTER TABLE user_roles MODIFY COLUMN role ENUM('customer','admin','staff') NOT NULL");
+} catch {}
+
 const [[{ n }]] = await c.query("SELECT COUNT(*) n FROM products");
 if (n === 0) {
   const IMG = "https://polarfiber.com.et/wp-content/uploads";

@@ -1,13 +1,63 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getCookie, deleteCookie, getRequestHeader, getRequestIP } from "@tanstack/react-start/server";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import { createHash, randomBytes } from "node:crypto";
 import { withDb, rows } from "./db.server";
-import { currentUser, endSession, loadUser, requireAdmin, requireUser, startSession } from "./session.server";
+import { currentUser, endSession, loadUser, requireAdmin, requireUser, startSession, issueTokenPair, revokeRefreshToken, rotateRefreshToken } from "./session.server";
 import type { Category, Order, OrderStatus, Product, Quote, QuoteStatus } from "../shared/data";
 import { CATEGORIES, ORDER_STATUSES, QUOTE_STATUSES } from "../shared/data";
+import { notify } from "../utils/notify";
+import { logAction } from "../utils/audit";
 
 const PRODUCT_SQL = `SELECT p.product_id,p.name,c.name category,p.capacity,p.price,p.stock,p.image,p.description
   FROM products p JOIN categories c ON c.category_id=p.category_id`;
+
+// ─── IP rate-limiting for login ──────────────────────────────────────────────
+const ipAttempts = new Map<string, { count: number; resetAt: number }>();
+
+function checkIpRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = ipAttempts.get(ip);
+  if (!entry || entry.resetAt < now) return false; // no limit hit
+  return entry.count >= 5;
+}
+
+function recordIpAttempt(ip: string): void {
+  const now = Date.now();
+  const entry = ipAttempts.get(ip);
+  if (!entry || entry.resetAt < now) {
+    ipAttempts.set(ip, { count: 1, resetAt: now + 15 * 60 * 1000 });
+  } else {
+    entry.count++;
+  }
+}
+
+function resetIpAttempts(ip: string): void {
+  ipAttempts.delete(ip);
+}
+
+function getClientIp(): string {
+  try {
+    const ip = getRequestIP?.();
+    if (ip) return ip;
+    const fwd = getRequestHeader?.("x-forwarded-for");
+    if (fwd) return fwd.split(",")[0]?.trim() || "0.0.0.0";
+    const realIp = getRequestHeader?.("x-real-ip");
+    if (realIp) return realIp;
+  } catch {
+    // fallback if called outside request context
+  }
+  return "0.0.0.0";
+}
+
+function getUserAgent(): string {
+  try {
+    return getRequestHeader?.("user-agent") ?? "";
+  } catch {
+    return "";
+  }
+}
 
 // ---------- catalog ----------
 export const getProducts = createServerFn({ method: "GET" }).handler(async () =>
@@ -33,17 +83,105 @@ export const login = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    const found = await withDb((c) =>
-      rows<{ user_id: number; password_hash: string }>(
-        c,
-        "SELECT user_id,password_hash FROM users WHERE email=?",
-        [data.email.toLowerCase()],
-      ),
-    );
-    if (!found[0] || !(await bcrypt.compare(data.password, found[0].password_hash)))
-      return { error: "Wrong email or password." };
-    startSession(found[0].user_id);
-    return { user: await loadUser(found[0].user_id) };
+    const ip = getClientIp();
+    if (checkIpRateLimit(ip)) return { error: "Invalid email or password." };
+
+    // Try the full query first (new schema), fall back to basic columns (old schema)
+    type LoginRow = {
+      user_id: number;
+      password_hash: string;
+      is_active: number;
+      failed_attempts: number;
+      locked_until: string | null;
+    };
+    let found: LoginRow[];
+    try {
+      found = await withDb((c) =>
+        rows<LoginRow>(
+          c,
+          "SELECT user_id, password_hash, is_active, failed_attempts, locked_until FROM users WHERE email=?",
+          [data.email.toLowerCase()],
+        ),
+      );
+    } catch {
+      // Schema not yet migrated — fetch only the base columns
+      const base = await withDb((c) =>
+        rows<{ user_id: number; password_hash: string }>(
+          c,
+          "SELECT user_id, password_hash FROM users WHERE email=?",
+          [data.email.toLowerCase()],
+        ),
+      );
+      found = base.map((r) => ({
+        ...r,
+        is_active: 1,
+        failed_attempts: 0,
+        locked_until: null,
+      }));
+    }
+
+    const user = found[0];
+
+    if (!user) {
+      recordIpAttempt(ip);
+      return { error: "Invalid email or password." };
+    }
+
+    if (!user.is_active) {
+      recordIpAttempt(ip);
+      return { error: "Invalid email or password." };
+    }
+
+    if (user.locked_until) {
+      const lockTime = new Date(user.locked_until).getTime();
+      if (lockTime > Date.now()) {
+        recordIpAttempt(ip);
+        return { error: "Invalid email or password." };
+      }
+    }
+
+    const ok = await bcrypt.compare(data.password, user.password_hash);
+    if (!ok) {
+      recordIpAttempt(ip);
+      const newAttempts = user.failed_attempts + 1;
+      try {
+        if (newAttempts >= 5) {
+          await withDb((c) =>
+            c.execute(
+              "UPDATE users SET failed_attempts=?, locked_until=DATE_ADD(NOW(), INTERVAL 15 MINUTE) WHERE user_id=?",
+              [newAttempts, user.user_id],
+            ),
+          );
+        } else {
+          await withDb((c) =>
+            c.execute("UPDATE users SET failed_attempts=? WHERE user_id=?", [
+              newAttempts,
+              user.user_id,
+            ]),
+          );
+        }
+      } catch {
+        // failed_attempts column may not exist yet — ignore
+      }
+      return { error: "Invalid email or password." };
+    }
+
+    // Success: reset counters
+    resetIpAttempts(ip);
+    try {
+      await withDb((c) =>
+        c.execute("UPDATE users SET failed_attempts=0, locked_until=NULL WHERE user_id=?", [
+          user.user_id,
+        ]),
+      );
+    } catch {
+      // failed_attempts column may not exist yet — ignore
+    }
+
+    const userAgent = getUserAgent();
+    startSession(user.user_id);
+    await issueTokenPair(user.user_id, userAgent);
+    return { user: await loadUser(user.user_id) };
   });
 
 export const register = createServerFn({ method: "POST" })
@@ -58,7 +196,7 @@ export const register = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    const hash = await bcrypt.hash(data.password, 10);
+    const hash = await bcrypt.hash(data.password, 12);
     const uid = await withDb(async (c) => {
       const exists = await rows(c, "SELECT 1 FROM users WHERE email=?", [data.email.toLowerCase()]);
       if (exists.length) return null;
@@ -76,13 +214,94 @@ export const register = createServerFn({ method: "POST" })
     });
     if (!uid) return { error: "An account with this email already exists." };
     startSession(uid);
+    await issueTokenPair(uid, getUserAgent());
     return { user: await loadUser(uid) };
   });
 
 export const logout = createServerFn({ method: "POST" }).handler(async () => {
+  const plainRefresh = getCookie("pf_refresh");
+  if (plainRefresh) {
+    const hash = createHash("sha256").update(plainRefresh).digest("hex");
+    await revokeRefreshToken(hash);
+  }
+  deleteCookie("pf_access", { path: "/" });
+  deleteCookie("pf_refresh", { path: "/" });
   endSession();
   return { ok: true };
 });
+
+export const refreshTokens = createServerFn({ method: "POST" }).handler(async () => {
+  const plainRefresh = getCookie("pf_refresh");
+  if (!plainRefresh) return { error: "Session expired." };
+
+  const hash = createHash("sha256").update(plainRefresh).digest("hex");
+  const tokenRows = await withDb((c) =>
+    rows<{ id: number; user_id: number }>(
+      c,
+      "SELECT id,user_id FROM refresh_tokens WHERE token_hash=? AND revoked_at IS NULL AND expires_at > NOW()",
+      [hash],
+    ),
+  );
+  const tokenRow = tokenRows[0];
+  if (!tokenRow) return { error: "Session expired." };
+
+  const userAgent = getUserAgent();
+  await rotateRefreshToken(hash, tokenRow.user_id, userAgent);
+  return { ok: true };
+});
+
+export const forgotPassword = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ email: z.string().email() }).parse(d))
+  .handler(async ({ data }) => {
+    const found = await withDb((c) =>
+      rows<{ user_id: number }>(
+        c,
+        "SELECT user_id FROM users WHERE email=?",
+        [data.email.toLowerCase()],
+      ),
+    );
+    const userRecord = found[0];
+    if (userRecord) {
+      const plainToken = randomBytes(32).toString("hex");
+      const tokenHash = createHash("sha256").update(plainToken).digest("hex");
+      await withDb((c) =>
+        c.execute(
+          "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 MINUTE))",
+          [userRecord.user_id, tokenHash],
+        ),
+      );
+      console.log("[DEV] password reset token for", data.email, ":", plainToken);
+    }
+    return { ok: true };
+  });
+
+export const resetPassword = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z.object({ token: z.string(), password: z.string().min(6) }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const tokenHash = createHash("sha256").update(data.token).digest("hex");
+    const found = await withDb((c) =>
+      rows<{ id: number; user_id: number }>(
+        c,
+        "SELECT id,user_id FROM password_reset_tokens WHERE token_hash=? AND used_at IS NULL AND expires_at > NOW()",
+        [tokenHash],
+      ),
+    );
+    const resetRecord = found[0];
+    if (!resetRecord) return { error: "This reset link is invalid or has expired." };
+
+    const newHash = await bcrypt.hash(data.password, 12);
+    await withDb(async (c) => {
+      await c.execute("UPDATE users SET password_hash=? WHERE user_id=?", [
+        newHash,
+        resetRecord.user_id,
+      ]);
+      await c.execute("UPDATE password_reset_tokens SET used_at=NOW() WHERE id=?", [resetRecord.id]);
+      await c.execute("DELETE FROM refresh_tokens WHERE user_id=?", [resetRecord.user_id]);
+    });
+    return { ok: true };
+  });
 
 // ---------- orders & quotes ----------
 async function loadOrders(where: string, params: unknown[]): Promise<Order[]> {
@@ -126,36 +345,67 @@ export const placeOrder = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const u = await requireUser();
     return withDb(async (c) => {
-      // Prices always come from the database, never from the browser.
-      const ids = data.items.map((i) => i.product_id);
-      const ps = await rows<{ product_id: number; name: string; price: number }>(
-        c,
-        `SELECT product_id,name,price FROM products WHERE product_id IN (${ids.map(() => "?").join(",")})`,
-        ids,
-      );
-      const lines = data.items.flatMap((i) => {
-        const p = ps.find((x) => x.product_id === i.product_id);
-        return p ? [{ ...i, p }] : [];
-      });
-      if (!lines.length) throw new Error("These products are no longer available.");
-      const total = lines.reduce((t, l) => t + l.p.price * l.quantity, 0);
+      // Sort unique product IDs to guarantee consistent row lock ordering and prevent deadlocks
+      const ids = [...new Set(data.items.map((i) => i.product_id))].sort((a, b) => a - b);
+      if (!ids.length) throw new Error("Order must contain at least one item.");
+
       await c.beginTransaction();
       try {
+        // Prices and stock always come from the database using SELECT ... FOR UPDATE
+        const ps = await rows<{ product_id: number; name: string; price: number; stock: number }>(
+          c,
+          `SELECT product_id, name, price, stock FROM products WHERE product_id IN (${ids.map(() => "?").join(",")}) ORDER BY product_id FOR UPDATE`,
+          ids,
+        );
+
+        const lines = data.items.flatMap((i) => {
+          const p = ps.find((x) => x.product_id === i.product_id);
+          return p ? [{ ...i, p }] : [];
+        });
+
+        if (lines.length !== data.items.length) {
+          throw new Error("One or more selected products are no longer available.");
+        }
+
+        // Verify stock for each item before deducting (stock never goes negative)
+        for (const l of lines) {
+          if (l.p.stock < l.quantity) {
+            throw new Error(`Insufficient stock for "${l.p.name}". Only ${l.p.stock} available.`);
+          }
+        }
+
+        const total = lines.reduce((t, l) => t + l.p.price * l.quantity, 0);
+
         const [r] = await c.execute("INSERT INTO orders (user_id,total,address) VALUES (?,?,?)", [
           u.user_id,
           total,
           data.address,
         ]);
         const oid = (r as { insertId: number }).insertId;
-        for (const l of lines)
+
+        for (const l of lines) {
           await c.execute(
             "INSERT INTO order_items (order_id,product_id,product_name,quantity,unit_price) VALUES (?,?,?,?,?)",
             [oid, l.product_id, l.p.name, l.quantity, l.p.price],
           );
+
+          // Deduct stock safely inside transaction
+          await c.execute(
+            "UPDATE products SET stock = stock - ? WHERE product_id = ? AND stock >= ?",
+            [l.quantity, l.product_id, l.quantity],
+          );
+
+          // Record stock movement (type 'out' for order)
+          await c.execute(
+            "INSERT INTO stock_movements (product_id, quantity, type, reference_type, reference_id) VALUES (?, ?, 'out', 'order', ?)",
+            [l.product_id, l.quantity, oid],
+          );
+        }
+
         await c.commit();
         return { order_id: oid };
       } catch (e) {
-        await c.rollback();
+        await c.rollback().catch(() => {});
         throw e;
       }
     });
@@ -287,7 +537,7 @@ export const changeMyPassword = createServerFn({ method: "POST" })
     if (!found[0] || !(await bcrypt.compare(data.currentPassword, found[0].password_hash))) {
       throw new Error("Current password does not match.");
     }
-    const newHash = await bcrypt.hash(data.newPassword, 10);
+    const newHash = await bcrypt.hash(data.newPassword, 12);
     await withDb((c) =>
       c.execute("UPDATE users SET password_hash=? WHERE user_id=?", [newHash, u.user_id]),
     );
@@ -313,7 +563,11 @@ export const getAdminData = createServerFn({ method: "GET" }).handler(async () =
     }>(
       c,
       `SELECT u.user_id,u.name,u.email,u.phone,
-        IF(EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='admin'),'admin','customer') role,
+        CASE
+          WHEN EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='admin') THEN 'admin'
+          WHEN EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='staff') THEN 'staff'
+          ELSE 'customer'
+        END role,
         (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.user_id) orders
        FROM users u ORDER BY u.user_id`,
     ),
@@ -518,14 +772,18 @@ export const getCustomers = createServerFn({ method: "GET" }).handler(async () =
       name: string;
       email: string;
       phone: string;
-      role: "customer" | "admin";
+      role: "customer" | "admin" | "staff";
       orders_count: number;
       total_spent: number;
       created_at: string;
     }>(
       c,
       `SELECT u.user_id, u.name, u.email, u.phone,
-              IF(EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='admin'),'admin','customer') as role,
+              CASE
+                WHEN EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='admin') THEN 'admin'
+                WHEN EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='staff') THEN 'staff'
+                ELSE 'customer'
+              END as role,
               (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.user_id) as orders_count,
               COALESCE((SELECT SUM(total) FROM orders o WHERE o.user_id=u.user_id AND o.status != 'Cancelled'), 0) as total_spent,
               DATE(u.created_at) as created_at
@@ -551,6 +809,7 @@ export const saveProduct = createServerFn({ method: "POST" })
   .validator((d) => productInput.parse(d))
   .handler(async ({ data }) => {
     await requireAdmin();
+    let productId = data.product_id;
     await withDb(async (c) => {
       const cat = (
         await rows<{ category_id: number }>(c, "SELECT category_id FROM categories WHERE name=?", [
@@ -567,25 +826,40 @@ export const saveProduct = createServerFn({ method: "POST" })
         data.image,
         data.description,
       ];
-      if (data.product_id === 0)
-        await c.execute(
+      if (data.product_id === 0) {
+        const [r] = await c.execute(
           "INSERT INTO products (category_id,name,capacity,price,stock,image,description) VALUES (?,?,?,?,?,?,?)",
           v,
         );
-      else
+        productId = (r as { insertId: number }).insertId;
+        await logAction(null, "CREATE_PRODUCT", "product", productId, null, data);
+      } else {
+        const oldRows = await rows<Product>(
+          c,
+          `${PRODUCT_SQL} WHERE p.product_id=?`,
+          [data.product_id],
+        );
+        const oldProduct = oldRows[0] ?? null;
         await c.execute(
           "UPDATE products SET category_id=?,name=?,capacity=?,price=?,stock=?,image=?,description=? WHERE product_id=?",
           [...v, data.product_id],
         );
+        await logAction(null, "UPDATE_PRODUCT", "product", data.product_id, oldProduct, data);
+      }
     });
-    return { ok: true };
+    return { ok: true, product_id: productId };
   });
 
 export const deleteProduct = createServerFn({ method: "POST" })
   .validator((d) => z.object({ id: z.number().int() }).parse(d))
   .handler(async ({ data }) => {
     await requireAdmin();
-    await withDb((c) => c.execute("DELETE FROM products WHERE product_id=?", [data.id]));
+    await withDb(async (c) => {
+      const oldRows = await rows<Product>(c, `${PRODUCT_SQL} WHERE p.product_id=?`, [data.id]);
+      const oldProduct = oldRows[0] ?? null;
+      await c.execute("DELETE FROM products WHERE product_id=?", [data.id]);
+      await logAction(null, "DELETE_PRODUCT", "product", data.id, oldProduct, null);
+    });
     return { ok: true };
   });
 
@@ -600,12 +874,67 @@ export const setOrderStatus = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     await requireAdmin();
-    await withDb((c) =>
-      c.execute("UPDATE orders SET status=? WHERE order_id=?", [
-        data.status as OrderStatus,
-        data.id,
-      ]),
-    );
+    await withDb(async (c) => {
+      await c.beginTransaction();
+      try {
+        const [existing] = await rows<{ order_id: number; user_id: number; status: OrderStatus }>(
+          c,
+          "SELECT order_id, user_id, status FROM orders WHERE order_id=? FOR UPDATE",
+          [data.id],
+        );
+        if (!existing) throw new Error("Order not found.");
+
+        const prevStatus = existing.status;
+        const newStatus = data.status as OrderStatus;
+
+        // Stock restored when order is cancelled from any status before 'delivered'
+        // Do NOT deduct again on 'confirmed'.
+        if (newStatus === "Cancelled" && prevStatus !== "Cancelled" && prevStatus !== "Delivered") {
+          const items = await rows<{ product_id: number; quantity: number }>(
+            c,
+            "SELECT product_id, quantity FROM order_items WHERE order_id=?",
+            [data.id],
+          );
+          for (const item of items) {
+            if (item.product_id) {
+              await c.execute("UPDATE products SET stock = stock + ? WHERE product_id = ?", [
+                item.quantity,
+                item.product_id,
+              ]);
+              await c.execute(
+                "INSERT INTO stock_movements (product_id, quantity, type, reference_type, reference_id) VALUES (?, ?, 'in', 'order', ?)",
+                [item.product_id, item.quantity, data.id],
+              );
+            }
+          }
+        }
+
+        await c.execute("UPDATE orders SET status=? WHERE order_id=?", [newStatus, data.id]);
+        await c.commit();
+
+        // Notify customer
+        await notify(
+          existing.user_id,
+          "order_status",
+          `Order #${existing.order_id} ${newStatus}`,
+          `Your order #${existing.order_id} status has been updated to ${newStatus}.`,
+          `/account?tab=orders`,
+        );
+
+        // Audit log
+        await logAction(
+          null,
+          "UPDATE_ORDER_STATUS",
+          "order",
+          data.id,
+          { status: prevStatus },
+          { status: newStatus },
+        );
+      } catch (err) {
+        await c.rollback().catch(() => {});
+        throw err;
+      }
+    });
     return { ok: true };
   });
 
@@ -615,12 +944,50 @@ export const setQuoteStatus = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     await requireAdmin();
-    await withDb((c) =>
-      c.execute("UPDATE quote_requests SET status=? WHERE quote_id=?", [
-        data.status as QuoteStatus,
+    await withDb(async (c) => {
+      const [existing] = await rows<{
+        quote_id: number;
+        user_id: number | null;
+        email: string;
+        status: QuoteStatus;
+      }>(c, "SELECT quote_id, user_id, email, status FROM quote_requests WHERE quote_id=?", [
         data.id,
-      ]),
-    );
+      ]);
+      if (!existing) throw new Error("Quote request not found.");
+
+      const prevStatus = existing.status;
+      const newStatus = data.status as QuoteStatus;
+
+      await c.execute("UPDATE quote_requests SET status=? WHERE quote_id=?", [
+        newStatus,
+        data.id,
+      ]);
+
+      let targetUserId = existing.user_id;
+      if (!targetUserId && existing.email) {
+        const u = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
+          existing.email.toLowerCase(),
+        ]);
+        if (u[0]) targetUserId = u[0].user_id;
+      }
+
+      await notify(
+        targetUserId,
+        "quote_status",
+        `Quote Request #${existing.quote_id} Updated`,
+        `Your quote request status has been updated to ${newStatus}.`,
+        `/account?tab=quotes`,
+      );
+
+      await logAction(
+        null,
+        "UPDATE_QUOTE_STATUS",
+        "quote",
+        data.id,
+        { status: prevStatus },
+        { status: newStatus },
+      );
+    });
     return { ok: true };
   });
 
@@ -633,12 +1000,122 @@ export const updateProductStock = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     await requireAdmin();
-    await withDb((c) =>
-      c.execute("UPDATE products SET stock=? WHERE product_id=?", [
+    await withDb(async (c) => {
+      const oldRows = await rows<{ stock: number }>(c, "SELECT stock FROM products WHERE product_id=?", [data.id]);
+      const oldStock = oldRows[0]?.stock ?? 0;
+      await c.execute("UPDATE products SET stock=? WHERE product_id=?", [
         data.stock,
         data.id,
-      ]),
-    );
+      ]);
+      await logAction(null, "UPDATE_PRODUCT_STOCK", "product", data.id, { stock: oldStock }, { stock: data.stock });
+    });
+    return { ok: true };
+  });
+
+export const getMyNotifications = createServerFn({ method: "GET" }).handler(async () => {
+  const u = await requireUser();
+  return withDb((c) =>
+    rows<{
+      id: number;
+      user_id: number;
+      type: string;
+      title: string;
+      body: string;
+      link_url: string | null;
+      is_read: number;
+      created_at: string;
+    }>(
+      c,
+      "SELECT id, user_id, type, title, body, link_url, is_read, DATE(created_at) created_at FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 50",
+      [u.user_id],
+    ),
+  );
+});
+
+export const getAuditLogs = createServerFn({ method: "GET" }).handler(async () => {
+  await requireAdmin();
+  return withDb((c) =>
+    rows<{
+      id: number;
+      actor_id: number | null;
+      actor_name: string | null;
+      ip_address: string | null;
+      action: string;
+      entity_type: string;
+      entity_id: string;
+      old_values: string | null;
+      new_values: string | null;
+      created_at: string;
+    }>(
+      c,
+      "SELECT id, actor_id, actor_name, ip_address, action, entity_type, entity_id, CAST(old_values AS CHAR) old_values, CAST(new_values AS CHAR) new_values, created_at FROM audit_logs ORDER BY id DESC LIMIT 100",
+    ),
+  );
+});
+
+export const replyContactMessage = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z.object({
+      quote_id: z.number().int().optional(),
+      email: z.string().email(),
+      message: z.string().min(1),
+    }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    await withDb(async (c) => {
+      const [u] = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
+        data.email.toLowerCase(),
+      ]);
+      if (u) {
+        await notify(
+          u.user_id,
+          "message_reply",
+          "New Message from Polar Fiber Support",
+          data.message,
+          "/account?tab=support",
+        );
+      }
+      await logAction(null, "REPLY_MESSAGE", "message", data.quote_id ?? data.email, null, {
+        email: data.email,
+        message: data.message,
+      });
+    });
+    return { ok: true };
+  });
+
+export const replySupportTicket = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z.object({
+      ticket_id: z.string(),
+      user_id: z.number().int().optional(),
+      customer_email: z.string().email().optional(),
+      reply: z.string().min(1),
+    }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    await withDb(async (c) => {
+      let targetUserId = data.user_id;
+      if (!targetUserId && data.customer_email) {
+        const [u] = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
+          data.customer_email.toLowerCase(),
+        ]);
+        if (u) targetUserId = u.user_id;
+      }
+      if (targetUserId) {
+        await notify(
+          targetUserId,
+          "ticket_reply",
+          `Reply on Ticket ${data.ticket_id}`,
+          data.reply,
+          "/account?tab=support",
+        );
+      }
+      await logAction(null, "REPLY_SUPPORT_TICKET", "ticket", data.ticket_id, null, {
+        reply: data.reply,
+      });
+    });
     return { ok: true };
   });
 

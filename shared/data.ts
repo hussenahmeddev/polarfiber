@@ -18,7 +18,7 @@ export type Product = {
   description: string;
 };
 
-export type Role = "customer" | "admin";
+export type Role = "customer" | "admin" | "staff";
 export type User = { user_id: number; name: string; email: string; phone: string; role: Role };
 
 export const ORDER_STATUSES = [
@@ -127,6 +127,40 @@ export type CustomerSummary = {
   role: Role;
   orders_count: number;
   total_spent: number;
+  created_at: string;
+};
+
+export type StockMovement = {
+  id: number;
+  product_id: number;
+  quantity: number;
+  type: "in" | "out";
+  reference_type: string;
+  reference_id: number;
+  created_at: string;
+};
+
+export type Notification = {
+  id: number;
+  user_id: number;
+  type: string;
+  title: string;
+  body: string;
+  link_url?: string | null;
+  is_read: boolean | number;
+  created_at: string;
+};
+
+export type AuditLog = {
+  id: number;
+  actor_id?: number | null;
+  actor_name?: string | null;
+  ip_address?: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  old_values?: string | Record<string, unknown> | null;
+  new_values?: string | Record<string, unknown> | null;
   created_at: string;
 };
 

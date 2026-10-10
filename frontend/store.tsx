@@ -1,13 +1,19 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { getMe, getProducts, logout as logoutFn } from "../backend/api.functions";
+import {
+  getMe,
+  getProducts,
+  logout as logoutFn,
+  refreshTokens as refreshTokensFn,
+} from "../backend/api.functions";
 import type { Product, User } from "../shared/data";
 
 // Cart stays in the browser; everything else lives in MySQL via server functions.
 type CartLine = { product_id: number; quantity: number };
 type Ctx = {
-  user: User | null;
+  // undefined = still loading, null = definitively logged out, User = authenticated
+  user: User | null | undefined;
   products: Product[];
   cart: CartLine[];
   refreshUser: () => Promise<void>;
@@ -26,7 +32,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const fetchMe = useServerFn(getMe);
   const fetchProducts = useServerFn(getProducts);
   const doLogout = useServerFn(logoutFn);
-  const me = useQuery({ queryKey: ["me"], queryFn: () => fetchMe() });
+  const doRefreshTokens = useServerFn(refreshTokensFn);
+
+  const me = useQuery({
+    queryKey: ["me"],
+    queryFn: async () => {
+      try {
+        return await fetchMe();
+      } catch {
+        // Access token may have expired — try a refresh once, then retry
+        try {
+          await doRefreshTokens();
+          return await fetchMe();
+        } catch {
+          return null;
+        }
+      }
+    },
+    retry: false,
+  });
+
   const products = useQuery({ queryKey: productsKey, queryFn: () => fetchProducts() });
   const [cart, setCart] = useState<CartLine[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -40,12 +65,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     setLoaded(true);
   }, []);
+
   useEffect(() => {
     if (loaded) localStorage.setItem(KEY, JSON.stringify(cart));
   }, [cart, loaded]);
 
   const value: Ctx = {
-    user: (me.data as User | null) ?? null,
+    // undefined while the query is in-flight, null when definitely not logged in
+    user: me.isPending ? undefined : ((me.data as User | null) ?? null),
     products: products.data ?? [],
     cart,
     refreshUser: async () => {
@@ -70,6 +97,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ),
     clearCart: () => setCart([]),
   };
+
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
 

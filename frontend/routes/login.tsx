@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Eye, EyeOff, Loader2, ShieldCheck, Truck, Droplets } from "lucide-react";
@@ -100,9 +100,12 @@ function Login() {
     if (Object.keys(errs).length) return;
     setBusy(true);
     try {
-      const r = await login({ data: li }).catch(() => ({
-        error: "We couldn't reach the server. Please try again in a moment.",
-      }));
+      const r = await login({ data: li }).catch((err) => {
+        console.error("Login request error:", err);
+        return {
+          error: "We couldn't reach the server. Please try again in a moment.",
+        };
+      });
       if ("error" in r || !r.user) {
         setFormError(("error" in r && r.error) || "Sign in failed. Please try again.");
         return;
@@ -196,6 +199,11 @@ function Login() {
                   onChange={(v) => setLi({ ...li, password: v })}
                 />
               </Field>
+              <div className="flex justify-end -mt-1">
+                <Link to="/forgot-password" className="text-sm text-primary hover:underline">
+                  Forgot password?
+                </Link>
+              </div>
               {submit("Sign in")}
             </form>
           </TabsContent>

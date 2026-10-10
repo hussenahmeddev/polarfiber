@@ -169,7 +169,7 @@ export function DashboardLayout({
                         className={cn(
                           "rounded-full px-2 py-0.5 text-xs font-semibold",
                           isActive
-                            ? "bg-white/20 text-white"
+                            ? "bg-primary-foreground/20 text-primary-foreground"
                             : "bg-muted text-muted-foreground",
                         )}
                       >
@@ -223,7 +223,7 @@ export function DashboardLayout({
             {/* Sign out */}
             <button
               onClick={handleSignOut}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-rose-600 dark:text-rose-400 transition-colors hover:bg-rose-500/10 cursor-pointer"
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 cursor-pointer"
             >
               <LogOut className="h-3.5 w-3.5" />
               Sign out

@@ -57,6 +57,7 @@ import {
   getProducts,
   updateMyProfile,
   changeMyPassword,
+  getMyNotifications,
 } from "@/backend/api.functions";
 import { cn } from "@/frontend/utils";
 
@@ -248,6 +249,7 @@ export function CustomerDashboard() {
   const fetchProducts = useServerFn(getProducts);
   const mutateProfile = useServerFn(updateMyProfile);
   const mutatePassword = useServerFn(changeMyPassword);
+  const fetchNotifications = useServerFn(getMyNotifications);
 
   // Queries
   const dashboardQuery = useQuery({
@@ -265,6 +267,12 @@ export function CustomerDashboard() {
   const quotesQuery = useQuery({
     queryKey: ["customer", "quotes", user?.user_id],
     queryFn: () => fetchQuotes(),
+    enabled: !!user,
+  });
+
+  const notificationsQuery = useQuery({
+    queryKey: ["customer", "notifications", user?.user_id],
+    queryFn: () => fetchNotifications(),
     enabled: !!user,
   });
 
@@ -289,14 +297,14 @@ export function CustomerDashboard() {
   if (!user) {
     return (
       <div className="mx-auto max-w-md px-4 py-24 text-center">
-        <div className="flex h-14 w-14 mx-auto items-center justify-center rounded-2xl bg-sky-50 text-sky-600 shadow-xs">
+        <div className="flex h-14 w-14 mx-auto items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-xs">
           <UserIcon className="h-7 w-7" />
         </div>
-        <h1 className="mt-4 text-2xl font-bold text-slate-900">Please Sign In</h1>
-        <p className="mt-2 text-sm text-slate-500">
+        <h1 className="mt-4 text-2xl font-bold text-foreground">Please Sign In</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
           Sign in to access your customer dashboard, track orders, and view quote inquiries.
         </p>
-        <Button asChild className="mt-6 w-full bg-sky-600 hover:bg-sky-700 text-white">
+        <Button asChild className="mt-6 w-full bg-primary hover:bg-primary/90 text-primary-foreground">
           <Link to="/login">Sign In to Polar Fiber</Link>
         </Button>
       </div>
@@ -316,7 +324,24 @@ export function CustomerDashboard() {
 
   const completedOrdersCount = allOrders.filter((o) => o.status === "Delivered").length;
 
-  const unreadNotificationsCount = notifications.filter((n) => !n.read).length;
+  const displayNotifications: CustomerNotification[] = React.useMemo(() => {
+    if (!notificationsQuery.data || !notificationsQuery.data.length) return notifications;
+    const dbNotifs: CustomerNotification[] = notificationsQuery.data.map((n) => ({
+      id: `db-notif-${n.id}`,
+      title: n.title,
+      message: n.body,
+      date: n.created_at || "Recent",
+      read: Boolean(n.is_read),
+      type: (n.type.includes("order")
+        ? "order"
+        : n.type.includes("quote")
+          ? "quote"
+          : "system") as CustomerNotification["type"],
+    }));
+    return [...dbNotifs, ...notifications];
+  }, [notificationsQuery.data, notifications]);
+
+  const unreadNotificationsCount = displayNotifications.filter((n) => !n.read).length;
 
   // Unread customer messages / replies from admin
   const unreadRepliesCount = conversations.filter((c) => c.status === "Admin Replied").length;
@@ -503,32 +528,32 @@ export function CustomerDashboard() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-800 antialiased flex flex-col">
+    <div className="min-h-screen bg-background text-foreground antialiased flex flex-col">
       {/* Top Header Bar matching Screenshot */}
-      <header className="sticky top-0 z-40 bg-white border-b border-slate-100 px-4 sm:px-8 py-3.5 flex items-center justify-between">
+      <header className="sticky top-0 z-40 bg-card border-b border-border px-4 sm:px-8 py-3.5 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="lg:hidden p-1.5 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100"
+            className="lg:hidden p-1.5 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted"
             aria-label="Toggle Navigation"
           >
             {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
           <Link to="/" className="flex items-center gap-2.5">
             <img src="/images/logo.png" alt="Polar Fiber" className="h-8 w-auto object-contain" />
-            <span className="font-bold text-base text-slate-900 tracking-tight">Polar Fiber</span>
+            <span className="font-bold text-base text-foreground tracking-tight">Polar Fiber</span>
           </Link>
         </div>
 
         <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-slate-600 hidden sm:inline-block">
+          <span className="text-sm font-medium text-muted-foreground hidden sm:inline-block">
             {user.name}
           </span>
           <button
             onClick={handleSignOut}
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-700 hover:text-slate-900 transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
           >
-            <LogOut className="h-4 w-4 text-slate-500" />
+            <LogOut className="h-4 w-4 text-muted-foreground" />
             <span>Sign Out</span>
           </button>
         </div>
@@ -539,7 +564,7 @@ export function CustomerDashboard() {
         {/* Mobile Backdrop */}
         {mobileMenuOpen && (
           <div
-            className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs lg:hidden"
+            className="fixed inset-0 z-40 bg-foreground/40 backdrop-blur-xs lg:hidden"
             onClick={() => setMobileMenuOpen(false)}
           />
         )}
@@ -547,7 +572,7 @@ export function CustomerDashboard() {
         {/* Sidebar Navigation */}
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-50 flex w-60 shrink-0 flex-col justify-between border-r border-slate-100 bg-white p-4 pt-6 transition-transform duration-200 lg:sticky lg:top-[57px] lg:h-[calc(100vh-57px)] lg:translate-x-0 lg:overflow-y-auto",
+            "fixed inset-y-0 left-0 z-50 flex w-60 shrink-0 flex-col justify-between border-r border-sidebar-border bg-sidebar p-4 pt-6 transition-transform duration-200 lg:sticky lg:top-[57px] lg:h-[calc(100vh-57px)] lg:translate-x-0 lg:overflow-y-auto",
             mobileMenuOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full lg:translate-x-0",
           )}
         >
@@ -567,15 +592,15 @@ export function CustomerDashboard() {
                     className={cn(
                       "group flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all duration-150 cursor-pointer text-left",
                       isActive
-                        ? "bg-sky-50 text-sky-600 font-semibold shadow-2xs"
-                        : "text-slate-600 hover:bg-slate-50 hover:text-slate-900",
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-2xs"
+                        : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
                     )}
                   >
                     <div className="flex items-center gap-3">
                       <Icon
                         className={cn(
                           "h-4 w-4 shrink-0 transition-transform group-hover:scale-105",
-                          isActive ? "text-sky-600" : "text-slate-400 group-hover:text-slate-600",
+                          isActive ? "text-sidebar-accent-foreground" : "text-sidebar-foreground/40 group-hover:text-sidebar-accent-foreground",
                         )}
                       />
                       <span>{item.label}</span>
@@ -584,7 +609,7 @@ export function CustomerDashboard() {
                       <span
                         className={cn(
                           "rounded-full px-2 py-0.5 text-[11px] font-bold",
-                          isActive ? "bg-sky-200/60 text-sky-700" : "bg-slate-100 text-slate-600",
+                          isActive ? "bg-sidebar-accent/60 text-sidebar-accent-foreground" : "bg-sidebar-border text-sidebar-foreground/70",
                         )}
                       >
                         {item.badge}
@@ -596,10 +621,10 @@ export function CustomerDashboard() {
             </nav>
           </div>
 
-          <div className="pt-4 border-t border-slate-100 space-y-2">
+          <div className="pt-4 border-t border-sidebar-border space-y-2">
             <Link
               to="/"
-              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-lg transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/50 rounded-lg transition-colors"
             >
               <ShoppingBag className="h-3.5 w-3.5" />
               <span>Back to Store</span>
@@ -617,10 +642,10 @@ export function CustomerDashboard() {
               <div className="space-y-6 animate-in fade-in-50 duration-200">
                 {/* Greeting Header */}
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+                  <h1 className="text-2xl font-bold tracking-tight text-foreground">
                     Welcome, {user.name}
                   </h1>
-                  <p className="text-sm text-slate-500 mt-1">
+                  <p className="text-sm text-muted-foreground mt-1">
                     Here is an overview of your account activity.
                   </p>
                 </div>
@@ -630,13 +655,13 @@ export function CustomerDashboard() {
                   {/* Card 1: Active Orders */}
                   <div
                     onClick={() => setActiveTab("orders")}
-                    className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+                    className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
                   >
                     <div>
-                      <p className="text-xs font-semibold text-slate-500">Active Orders</p>
-                      <p className="text-3xl font-bold text-slate-900 mt-1.5">{activeOrdersCount}</p>
+                      <p className="text-xs font-semibold text-muted-foreground">Active Orders</p>
+                      <p className="text-3xl font-bold text-foreground mt-1.5">{activeOrdersCount}</p>
                     </div>
-                    <div className="h-13 w-13 rounded-2xl bg-sky-50 flex items-center justify-center text-sky-500 group-hover:scale-105 transition-transform">
+                    <div className="h-13 w-13 rounded-2xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
                       <Package className="h-6 w-6 stroke-[2]" />
                     </div>
                   </div>
@@ -644,11 +669,11 @@ export function CustomerDashboard() {
                   {/* Card 2: Pending Quotes */}
                   <div
                     onClick={() => setActiveTab("quotes")}
-                    className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+                    className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
                   >
                     <div>
-                      <p className="text-xs font-semibold text-slate-500">Pending Quotes</p>
-                      <p className="text-3xl font-bold text-slate-900 mt-1.5">{pendingQuotesCount}</p>
+                      <p className="text-xs font-semibold text-muted-foreground">Pending Quotes</p>
+                      <p className="text-3xl font-bold text-foreground mt-1.5">{pendingQuotesCount}</p>
                     </div>
                     <div className="h-13 w-13 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-500 group-hover:scale-105 transition-transform">
                       <FileText className="h-6 w-6 stroke-[2]" />
@@ -661,11 +686,11 @@ export function CustomerDashboard() {
                       setOrderStatusFilter("Delivered");
                       setActiveTab("orders");
                     }}
-                    className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+                    className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
                   >
                     <div>
-                      <p className="text-xs font-semibold text-slate-500">Completed Orders</p>
-                      <p className="text-3xl font-bold text-slate-900 mt-1.5">{completedOrdersCount}</p>
+                      <p className="text-xs font-semibold text-muted-foreground">Completed Orders</p>
+                      <p className="text-3xl font-bold text-foreground mt-1.5">{completedOrdersCount}</p>
                     </div>
                     <div className="h-13 w-13 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-500 group-hover:scale-105 transition-transform">
                       <CheckCircle2 className="h-6 w-6 stroke-[2]" />
@@ -675,15 +700,15 @@ export function CustomerDashboard() {
                   {/* Card 4: Unread Notifications */}
                   <div
                     onClick={() => setActiveTab("notifications")}
-                    className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+                    className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
                   >
                     <div>
-                      <p className="text-xs font-semibold text-slate-500">Unread Notifications</p>
-                      <p className="text-3xl font-bold text-slate-900 mt-1.5">
+                      <p className="text-xs font-semibold text-muted-foreground">Unread Notifications</p>
+                      <p className="text-3xl font-bold text-foreground mt-1.5">
                         {unreadNotificationsCount}
                       </p>
                     </div>
-                    <div className="h-13 w-13 rounded-2xl bg-sky-50 flex items-center justify-center text-sky-500 group-hover:scale-105 transition-transform">
+                    <div className="h-13 w-13 rounded-2xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
                       <Bell className="h-6 w-6 stroke-[2]" />
                     </div>
                   </div>
@@ -693,26 +718,26 @@ export function CustomerDashboard() {
                 <div className="flex items-center gap-3 pt-1">
                   <Button
                     asChild
-                    className="bg-sky-600 hover:bg-sky-700 text-white font-medium px-5 py-2.5 rounded-xl shadow-xs"
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground font-medium px-5 py-2.5 rounded-xl shadow-xs"
                   >
                     <Link to="/products">Browse Products</Link>
                   </Button>
                   <Button
                     asChild
                     variant="outline"
-                    className="bg-white border-slate-200 hover:bg-slate-50 text-slate-700 font-medium px-5 py-2.5 rounded-xl"
+                    className="bg-card border-border hover:bg-muted/60 text-foreground font-medium px-5 py-2.5 rounded-xl"
                   >
                     <Link to="/quote">Request a Quote</Link>
                   </Button>
                 </div>
 
                 {/* Recent Orders Horizontal Card */}
-                <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-                    <h2 className="text-base font-bold text-slate-900">Recent Orders</h2>
+                <div className="bg-card border border-border rounded-2xl p-6 shadow-xs">
+                  <div className="flex items-center justify-between border-b border-border pb-4">
+                    <h2 className="text-base font-bold text-foreground">Recent Orders</h2>
                     <button
                       onClick={() => setActiveTab("orders")}
-                      className="text-xs font-semibold text-sky-600 hover:text-sky-700 cursor-pointer"
+                      className="text-xs font-semibold text-primary hover:text-primary/80 cursor-pointer"
                     >
                       View All
                     </button>
@@ -720,15 +745,15 @@ export function CustomerDashboard() {
 
                   <div className="pt-6">
                     {recentOrders.length === 0 ? (
-                      <p className="text-sm text-slate-500 py-6 text-center">
+                      <p className="text-sm text-muted-foreground py-6 text-center">
                         No orders yet.{" "}
-                        <Link to="/products" className="text-sky-600 font-semibold hover:underline">
+                        <Link to="/products" className="text-primary font-semibold hover:underline">
                           Browse products
                         </Link>{" "}
                         to place your first order.
                       </p>
                     ) : (
-                      <div className="divide-y divide-slate-100">
+                      <div className="divide-y divide-border">
                         {recentOrders.map((ord) => (
                           <div
                             key={ord.order_id}
@@ -736,21 +761,21 @@ export function CustomerDashboard() {
                               setSelectedOrder(ord);
                               setOrderDrawerOpen(true);
                             }}
-                            className="py-3.5 flex items-center justify-between hover:bg-slate-50 px-2 rounded-xl transition-colors cursor-pointer"
+                            className="py-3.5 flex items-center justify-between hover:bg-muted/40 px-2 rounded-xl transition-colors cursor-pointer"
                           >
                             <div className="space-y-0.5">
                               <div className="flex items-center gap-2.5">
-                                <span className="font-semibold text-sm text-slate-900">
+                                <span className="font-semibold text-sm text-foreground">
                                   Order #{ord.order_id}
                                 </span>
                                 <StatusBadge s={ord.status} />
                               </div>
-                              <p className="text-xs text-slate-500">
+                              <p className="text-xs text-muted-foreground">
                                 {ord.created_at} · {ord.items.map((i) => `${i.quantity}x ${i.product_name}`).join(", ")}
                               </p>
                             </div>
                             <div className="text-right">
-                              <span className="font-bold text-sky-600 text-sm">{etb(ord.total)}</span>
+                              <span className="font-bold text-primary text-sm">{etb(ord.total)}</span>
                             </div>
                           </div>
                         ))}
@@ -760,12 +785,12 @@ export function CustomerDashboard() {
                 </div>
 
                 {/* Recent Quotes Horizontal Card */}
-                <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-                    <h2 className="text-base font-bold text-slate-900">Recent Quotes</h2>
+                <div className="bg-card border border-border rounded-2xl p-6 shadow-xs">
+                  <div className="flex items-center justify-between border-b border-border pb-4">
+                    <h2 className="text-base font-bold text-foreground">Recent Quotes</h2>
                     <button
                       onClick={() => setActiveTab("quotes")}
-                      className="text-xs font-semibold text-sky-600 hover:text-sky-700 cursor-pointer"
+                      className="text-xs font-semibold text-primary hover:text-primary/80 cursor-pointer"
                     >
                       View All
                     </button>
@@ -773,15 +798,15 @@ export function CustomerDashboard() {
 
                   <div className="pt-6">
                     {recentQuotes.length === 0 ? (
-                      <p className="text-sm text-slate-500 py-6 text-center">
+                      <p className="text-sm text-muted-foreground py-6 text-center">
                         No quotes yet.{" "}
-                        <Link to="/quote" className="text-sky-600 font-semibold hover:underline">
+                        <Link to="/quote" className="text-primary font-semibold hover:underline">
                           Request a quote
                         </Link>{" "}
                         to get started.
                       </p>
                     ) : (
-                      <div className="divide-y divide-slate-100">
+                      <div className="divide-y divide-border">
                         {recentQuotes.map((q) => (
                           <div
                             key={q.quote_id}
@@ -789,18 +814,18 @@ export function CustomerDashboard() {
                               setSelectedQuote(q);
                               setActiveTab("quotes");
                             }}
-                            className="py-3.5 flex items-center justify-between hover:bg-slate-50 px-2 rounded-xl transition-colors cursor-pointer"
+                            className="py-3.5 flex items-center justify-between hover:bg-muted/40 px-2 rounded-xl transition-colors cursor-pointer"
                           >
                             <div className="space-y-0.5 min-w-0 pr-2">
                               <div className="flex items-center gap-2.5">
-                                <span className="font-semibold text-sm text-slate-900 truncate">
+                                <span className="font-semibold text-sm text-foreground truncate">
                                   {q.subject}
                                 </span>
                                 <StatusBadge s={q.status} />
                               </div>
-                              <p className="text-xs text-slate-500 truncate">{q.created_at}</p>
+                              <p className="text-xs text-muted-foreground truncate">{q.created_at}</p>
                             </div>
-                            <Button size="sm" variant="ghost" className="text-xs text-sky-600 shrink-0">
+                            <Button size="sm" variant="ghost" className="text-xs text-primary shrink-0">
                               View
                             </Button>
                           </div>
@@ -819,10 +844,10 @@ export function CustomerDashboard() {
               <div className="space-y-6 animate-in fade-in-50 duration-200">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-900">My Orders</h1>
-                    <p className="text-sm text-slate-500 mt-1">Track manufacturing, shipping status, and order history</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">My Orders</h1>
+                    <p className="text-sm text-muted-foreground mt-1">Track manufacturing, shipping status, and order history</p>
                   </div>
-                  <Button asChild className="bg-sky-600 hover:bg-sky-700 text-white gap-2">
+                  <Button asChild className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2">
                     <Link to="/products">
                       <Plus className="h-4 w-4" />
                       New Order
@@ -832,18 +857,18 @@ export function CustomerDashboard() {
 
                 <div className="flex flex-col sm:flex-row items-center gap-3">
                   <div className="relative flex-1 w-full sm:max-w-xs">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                       placeholder="Search order #, items, address..."
                       value={orderSearch}
                       onChange={(e) => setOrderSearch(e.target.value)}
-                      className="pl-9 bg-white border-slate-200"
+                      className="pl-9 border-border"
                     />
                   </div>
                   <select
                     value={orderStatusFilter}
                     onChange={(e) => setOrderStatusFilter(e.target.value)}
-                    className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700"
+                    className="h-10 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground"
                   >
                     <option value="all">All Statuses</option>
                     <option value="Pending">Pending</option>
@@ -854,10 +879,10 @@ export function CustomerDashboard() {
                   </select>
                 </div>
 
-                <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
+                <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-sm">
-                      <thead className="border-b border-slate-100 bg-slate-50/70 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                         <tr>
                           <th className="px-5 py-4">Order #</th>
                           <th className="px-5 py-4">Date Placed</th>
@@ -867,10 +892,10 @@ export function CustomerDashboard() {
                           <th className="px-5 py-4 text-right">Actions</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody className="divide-y divide-border">
                         {filteredOrders.length === 0 ? (
                           <tr>
-                            <td colSpan={6} className="py-12 text-center text-slate-400 text-sm">
+                            <td colSpan={6} className="py-12 text-center text-muted-foreground/60 text-sm">
                               No orders found matching your search.
                             </td>
                           </tr>
@@ -882,19 +907,19 @@ export function CustomerDashboard() {
                                 setSelectedOrder(o);
                                 setOrderDrawerOpen(true);
                               }}
-                              className="hover:bg-slate-50/60 transition-colors cursor-pointer"
+                              className="hover:bg-muted/40 transition-colors cursor-pointer"
                             >
-                              <td className="px-5 py-4 font-bold text-slate-900">#{o.order_id}</td>
-                              <td className="px-5 py-4 text-slate-500 text-xs">{o.created_at}</td>
-                              <td className="px-5 py-4 text-xs text-slate-600 max-w-xs truncate">
+                              <td className="px-5 py-4 font-bold text-foreground">#{o.order_id}</td>
+                              <td className="px-5 py-4 text-muted-foreground text-xs">{o.created_at}</td>
+                              <td className="px-5 py-4 text-xs text-muted-foreground max-w-xs truncate">
                                 {o.items.map((i) => `${i.quantity}x ${i.product_name}`).join(", ")}
                               </td>
-                              <td className="px-5 py-4 font-bold text-sky-600">{etb(o.total)}</td>
+                              <td className="px-5 py-4 font-bold text-primary">{etb(o.total)}</td>
                               <td className="px-5 py-4">
                                 <StatusBadge s={o.status} />
                               </td>
                               <td className="px-5 py-4 text-right">
-                                <Button size="sm" variant="ghost" className="text-xs text-sky-600 font-semibold">
+                                <Button size="sm" variant="ghost" className="text-xs text-primary font-semibold">
                                   Track Details
                                 </Button>
                               </td>
@@ -915,10 +940,10 @@ export function CustomerDashboard() {
               <div className="space-y-6 animate-in fade-in-50 duration-200">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-900">My Quote Requests</h1>
-                    <p className="text-sm text-slate-500 mt-1">Review custom engineering and fabrication inquiries</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">My Quote Requests</h1>
+                    <p className="text-sm text-muted-foreground mt-1">Review custom engineering and fabrication inquiries</p>
                   </div>
-                  <Button asChild className="bg-sky-600 hover:bg-sky-700 text-white gap-2">
+                  <Button asChild className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2">
                     <Link to="/quote">
                       <Plus className="h-4 w-4" />
                       Request New Quote
@@ -928,7 +953,7 @@ export function CustomerDashboard() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {allQuotes.length === 0 ? (
-                    <div className="col-span-2 bg-white border border-slate-100 rounded-2xl p-12 text-center">
+                    <div className="col-span-2 bg-card border border-border rounded-2xl p-12 text-center">
                       <EmptyState
                         icon={FileText}
                         title="No quote inquiries found"
@@ -942,22 +967,22 @@ export function CustomerDashboard() {
                     allQuotes.map((q) => (
                       <div
                         key={q.quote_id}
-                        className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs space-y-4 hover:shadow-md transition-shadow"
+                        className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4 hover:shadow-md transition-shadow"
                       >
-                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                          <span className="text-xs font-semibold text-slate-400">Inquiry #{q.quote_id}</span>
+                        <div className="flex items-center justify-between border-b border-border pb-3">
+                          <span className="text-xs font-semibold text-muted-foreground/60">Inquiry #{q.quote_id}</span>
                           <StatusBadge s={q.status} />
                         </div>
                         <div>
-                          <h3 className="font-bold text-slate-900 text-base">{q.subject}</h3>
-                          <p className="text-xs text-slate-400 mt-1">Submitted on {q.created_at}</p>
-                          <div className="mt-3 rounded-xl bg-slate-50 p-3.5 text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">
+                          <h3 className="font-bold text-foreground text-base">{q.subject}</h3>
+                          <p className="text-xs text-muted-foreground/60 mt-1">Submitted on {q.created_at}</p>
+                          <div className="mt-3 rounded-xl bg-muted/50 p-3.5 text-xs text-foreground leading-relaxed whitespace-pre-wrap">
                             {q.message}
                           </div>
                         </div>
                         <div className="pt-2 flex justify-between items-center text-xs">
-                          <span className="text-slate-400">Response via: {q.email}</span>
-                          <Button asChild size="sm" variant="outline" className="text-xs text-sky-600">
+                          <span className="text-muted-foreground/60">Response via: {q.email}</span>
+                          <Button asChild size="sm" variant="outline" className="text-xs text-primary">
                             <a href={`mailto:info@polarfiber.et?subject=Follow-up on Inquiry #${q.quote_id}`}>
                               Follow Up
                             </a>
@@ -977,12 +1002,12 @@ export function CustomerDashboard() {
               <div className="space-y-6 animate-in fade-in-50 duration-200">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-900">Direct Messages</h1>
-                    <p className="text-sm text-slate-500 mt-1">Chat directly with Polar Fiber engineers, sales, and support</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">Direct Messages</h1>
+                    <p className="text-sm text-muted-foreground mt-1">Chat directly with Polar Fiber engineers, sales, and support</p>
                   </div>
                   <Button
                     onClick={() => setNewMessageDialogOpen(true)}
-                    className="bg-sky-600 hover:bg-sky-700 text-white gap-2"
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
                   >
                     <Plus className="h-4 w-4" />
                     New Message
@@ -991,20 +1016,20 @@ export function CustomerDashboard() {
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   {/* Left: Conversation List */}
-                  <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-xs space-y-3">
+                  <div className="bg-card border border-border rounded-2xl p-4 shadow-xs space-y-3">
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
                       <Input
                         placeholder="Search conversations..."
                         value={messageSearch}
                         onChange={(e) => setMessageSearch(e.target.value)}
-                        className="pl-8 text-xs bg-slate-50 border-slate-200 h-8"
+                        className="pl-8 text-xs border-border h-8"
                       />
                     </div>
 
                     <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
                       {filteredConversations.length === 0 ? (
-                        <p className="p-8 text-center text-xs text-slate-400">No message threads found.</p>
+                        <p className="p-8 text-center text-xs text-muted-foreground/60">No message threads found.</p>
                       ) : (
                         filteredConversations.map((conv) => {
                           const isSelected = selectedConversation?.id === conv.id;
@@ -1014,12 +1039,12 @@ export function CustomerDashboard() {
                               onClick={() => setSelectedConversation(conv)}
                               className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
                                 isSelected
-                                  ? "border-sky-500 bg-sky-50/70 shadow-xs"
-                                  : "border-slate-100 hover:bg-slate-50"
+                                  ? "border-primary bg-primary/5 shadow-xs"
+                                  : "border-border hover:bg-muted/50"
                               }`}
                             >
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                                   {conv.topic}
                                 </span>
                                 <span
@@ -1027,20 +1052,20 @@ export function CustomerDashboard() {
                                     conv.status === "Admin Replied"
                                       ? "bg-emerald-100 text-emerald-800"
                                       : conv.status === "Resolved"
-                                        ? "bg-slate-100 text-slate-600"
+                                        ? "bg-muted text-muted-foreground"
                                         : "bg-amber-100 text-amber-800"
                                   }`}
                                 >
                                   {conv.status}
                                 </span>
                               </div>
-                              <h4 className="font-semibold text-sm text-slate-900 mt-1 line-clamp-1">
+                              <h4 className="font-semibold text-sm text-foreground mt-1 line-clamp-1">
                                 {conv.subject}
                               </h4>
-                              <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">
+                              <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">
                                 {conv.messages[conv.messages.length - 1]?.text}
                               </p>
-                              <p className="text-[10px] text-slate-400 mt-1 text-right">{conv.updated_at}</p>
+                              <p className="text-[10px] text-muted-foreground/60 mt-1 text-right">{conv.updated_at}</p>
                             </div>
                           );
                         })
@@ -1049,21 +1074,21 @@ export function CustomerDashboard() {
                   </div>
 
                   {/* Right: Message Stream & Reply Box */}
-                  <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs lg:col-span-2 flex flex-col justify-between min-h-[500px]">
+                  <div className="bg-card border border-border rounded-2xl p-6 shadow-xs lg:col-span-2 flex flex-col justify-between min-h-[500px]">
                     {selectedConversation ? (
                       <div className="flex flex-col h-full justify-between space-y-4">
                         {/* Conversation Header */}
-                        <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
+                        <div className="border-b border-border pb-3 flex items-center justify-between">
                           <div>
-                            <h3 className="font-bold text-base text-slate-900">{selectedConversation.subject}</h3>
-                            <p className="text-xs text-slate-400 mt-0.5">Topic: {selectedConversation.topic}</p>
+                            <h3 className="font-bold text-base text-foreground">{selectedConversation.subject}</h3>
+                            <p className="text-xs text-muted-foreground/60 mt-0.5">Topic: {selectedConversation.topic}</p>
                           </div>
                           <span
                             className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
                               selectedConversation.status === "Admin Replied"
                                 ? "bg-emerald-100 text-emerald-800"
                                 : selectedConversation.status === "Resolved"
-                                  ? "bg-slate-100 text-slate-600"
+                                  ? "bg-muted text-muted-foreground"
                                   : "bg-amber-100 text-amber-800"
                             }`}
                           >
@@ -1080,16 +1105,16 @@ export function CustomerDashboard() {
                                 key={m.id}
                                 className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
                               >
-                                <div className="flex items-center gap-1.5 mb-1 text-[11px] text-slate-400">
-                                  <span className="font-semibold text-slate-700">{m.senderName}</span>
+                                <div className="flex items-center gap-1.5 mb-1 text-[11px] text-muted-foreground/60">
+                                  <span className="font-semibold text-muted-foreground">{m.senderName}</span>
                                   <span>·</span>
                                   <span>{m.timestamp}</span>
                                 </div>
                                 <div
                                   className={`rounded-2xl px-4 py-3 text-sm leading-relaxed max-w-[85%] whitespace-pre-wrap ${
                                     isMe
-                                      ? "bg-sky-600 text-white rounded-tr-xs"
-                                      : "bg-slate-100 text-slate-800 rounded-tl-xs border border-slate-200/60"
+                                      ? "bg-primary text-primary-foreground rounded-tr-xs"
+                                      : "bg-muted text-foreground rounded-tl-xs border border-border/60"
                                   }`}
                                 >
                                   {m.text}
@@ -1100,7 +1125,7 @@ export function CustomerDashboard() {
                         </div>
 
                         {/* Reply Input Box */}
-                        <div className="pt-3 border-t border-slate-100 flex items-center gap-2">
+                        <div className="pt-3 border-t border-border flex items-center gap-2">
                           <Input
                             placeholder="Type your response or follow-up question..."
                             value={replyInput}
@@ -1111,11 +1136,11 @@ export function CustomerDashboard() {
                                 handleSendReply();
                               }
                             }}
-                            className="bg-slate-50 border-slate-200 flex-1"
+                            className="bg-muted/50 border-border flex-1"
                           />
                           <Button
                             onClick={handleSendReply}
-                            className="bg-sky-600 hover:bg-sky-700 text-white gap-1.5"
+                            className="bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5"
                           >
                             <Send className="h-4 w-4" />
                             Send
@@ -1141,15 +1166,15 @@ export function CustomerDashboard() {
             {activeTab === "favorites" && (
               <div className="space-y-6 animate-in fade-in-50 duration-200">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-slate-900">Favorite Products</h1>
-                  <p className="text-sm text-slate-500 mt-1">Quick access to fiberglass items you order regularly</p>
+                  <h1 className="text-2xl font-bold tracking-tight text-foreground">Favorite Products</h1>
+                  <p className="text-sm text-muted-foreground mt-1">Quick access to fiberglass items you order regularly</p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                   {favoriteProducts.map((p) => (
                     <div
                       key={p.product_id}
-                      className="bg-white border border-slate-100 rounded-2xl p-4 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow"
+                      className="bg-card border border-border rounded-2xl p-4 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow"
                     >
                       <div>
                         {p.image ? (
@@ -1159,13 +1184,13 @@ export function CustomerDashboard() {
                             className="h-36 w-full rounded-xl object-cover mb-3"
                           />
                         ) : (
-                          <div className="h-36 w-full rounded-xl bg-slate-100 flex items-center justify-center text-slate-400 mb-3">
+                          <div className="h-36 w-full rounded-xl bg-muted flex items-center justify-center text-muted-foreground/60 mb-3">
                             <Package className="h-8 w-8" />
                           </div>
                         )}
-                        <h4 className="font-bold text-slate-900 text-sm line-clamp-1">{p.name}</h4>
-                        <p className="text-xs text-slate-500 mt-0.5">{p.category}</p>
-                        <p className="font-bold text-sky-600 text-base mt-2">{etb(p.price)}</p>
+                        <h4 className="font-bold text-foreground text-sm line-clamp-1">{p.name}</h4>
+                        <p className="text-xs text-muted-foreground mt-0.5">{p.category}</p>
+                        <p className="font-bold text-primary text-base mt-2">{etb(p.price)}</p>
                       </div>
 
                       <Button
@@ -1174,7 +1199,7 @@ export function CustomerDashboard() {
                           addToCart(p.product_id, 1);
                           toast.success(`Added ${p.name} to cart`);
                         }}
-                        className="mt-4 w-full bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold gap-1.5"
+                        className="mt-4 w-full bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold gap-1.5"
                       >
                         <ShoppingBag className="h-3.5 w-3.5" />
                         Add to Cart
@@ -1191,21 +1216,21 @@ export function CustomerDashboard() {
             {activeTab === "profile" && (
               <div className="space-y-6 max-w-2xl animate-in fade-in-50 duration-200">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-slate-900">Profile & Security</h1>
-                  <p className="text-sm text-slate-500 mt-1">Manage your personal information and password</p>
+                  <h1 className="text-2xl font-bold tracking-tight text-foreground">Profile & Security</h1>
+                  <p className="text-sm text-muted-foreground mt-1">Manage your personal information and password</p>
                 </div>
 
                 {/* Profile Details Form */}
                 <form
                   onSubmit={handleProfileSubmit}
-                  className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs space-y-4"
+                  className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4"
                 >
-                  <h3 className="font-bold text-base text-slate-900 border-b border-slate-100 pb-3">
+                  <h3 className="font-bold text-base text-foreground border-b border-border pb-3">
                     Personal Information
                   </h3>
                   <div className="space-y-3">
                     <div>
-                      <Label className="text-xs font-semibold text-slate-600">Full Name</Label>
+                      <Label className="text-xs font-semibold text-muted-foreground">Full Name</Label>
                       <Input
                         value={profileName}
                         onChange={(e) => setProfileName(e.target.value)}
@@ -1214,11 +1239,11 @@ export function CustomerDashboard() {
                       />
                     </div>
                     <div>
-                      <Label className="text-xs font-semibold text-slate-600">Email Address (Read-only)</Label>
-                      <Input value={user.email} disabled className="mt-1 bg-slate-50 text-slate-500" />
+                      <Label className="text-xs font-semibold text-muted-foreground">Email Address (Read-only)</Label>
+                      <Input value={user.email} disabled className="mt-1 bg-muted/50 text-muted-foreground" />
                     </div>
                     <div>
-                      <Label className="text-xs font-semibold text-slate-600">Phone Number</Label>
+                      <Label className="text-xs font-semibold text-muted-foreground">Phone Number</Label>
                       <Input
                         value={profilePhone}
                         onChange={(e) => setProfilePhone(e.target.value)}
@@ -1231,7 +1256,7 @@ export function CustomerDashboard() {
                     <Button
                       type="submit"
                       disabled={savingProfile}
-                      className="bg-sky-600 hover:bg-sky-700 text-white font-medium"
+                      className="bg-primary hover:bg-primary/90 text-primary-foreground font-medium"
                     >
                       {savingProfile ? "Saving..." : "Save Profile"}
                     </Button>
@@ -1241,14 +1266,14 @@ export function CustomerDashboard() {
                 {/* Password Change Form */}
                 <form
                   onSubmit={handlePasswordSubmit}
-                  className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs space-y-4"
+                  className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4"
                 >
-                  <h3 className="font-bold text-base text-slate-900 border-b border-slate-100 pb-3">
+                  <h3 className="font-bold text-base text-foreground border-b border-border pb-3">
                     Change Password
                   </h3>
                   <div className="space-y-3">
                     <div>
-                      <Label className="text-xs font-semibold text-slate-600">Current Password</Label>
+                      <Label className="text-xs font-semibold text-muted-foreground">Current Password</Label>
                       <Input
                         type="password"
                         value={currentPassword}
@@ -1258,7 +1283,7 @@ export function CustomerDashboard() {
                       />
                     </div>
                     <div>
-                      <Label className="text-xs font-semibold text-slate-600">New Password</Label>
+                      <Label className="text-xs font-semibold text-muted-foreground">New Password</Label>
                       <Input
                         type="password"
                         value={newPassword}
@@ -1268,7 +1293,7 @@ export function CustomerDashboard() {
                       />
                     </div>
                     <div>
-                      <Label className="text-xs font-semibold text-slate-600">Confirm New Password</Label>
+                      <Label className="text-xs font-semibold text-muted-foreground">Confirm New Password</Label>
                       <Input
                         type="password"
                         value={confirmPassword}
@@ -1299,12 +1324,12 @@ export function CustomerDashboard() {
               <div className="space-y-6 animate-in fade-in-50 duration-200">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-900">Delivery Addresses</h1>
-                    <p className="text-sm text-slate-500 mt-1">Manage delivery locations and site drop-offs across Ethiopia</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">Delivery Addresses</h1>
+                    <p className="text-sm text-muted-foreground mt-1">Manage delivery locations and site drop-offs across Ethiopia</p>
                   </div>
                   <Button
                     onClick={() => setNewAddressDialogOpen(true)}
-                    className="bg-sky-600 hover:bg-sky-700 text-white gap-2"
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
                   >
                     <Plus className="h-4 w-4" />
                     Add Address
@@ -1315,28 +1340,28 @@ export function CustomerDashboard() {
                   {addresses.map((addr) => (
                     <div
                       key={addr.id}
-                      className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs space-y-4 hover:shadow-md transition-shadow relative"
+                      className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4 hover:shadow-md transition-shadow relative"
                     >
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                      <div className="flex items-center justify-between border-b border-border pb-3">
                         <div className="flex items-center gap-2">
-                          <MapPin className="h-4 w-4 text-sky-600" />
-                          <h3 className="font-bold text-slate-900 text-sm">{addr.label}</h3>
+                          <MapPin className="h-4 w-4 text-primary" />
+                          <h3 className="font-bold text-foreground text-sm">{addr.label}</h3>
                         </div>
                         {addr.isDefault && (
-                          <span className="bg-sky-50 text-sky-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-sky-200">
+                          <span className="bg-primary/10 text-primary text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-primary/20">
                             Default
                           </span>
                         )}
                       </div>
 
-                      <div className="text-xs text-slate-600 space-y-1">
-                        <p className="font-semibold text-slate-900">{addr.recipient}</p>
+                      <div className="text-xs text-muted-foreground space-y-1">
+                        <p className="font-semibold text-foreground">{addr.recipient}</p>
                         <p>{addr.phone}</p>
                         <p>{addr.subcity}, {addr.city}</p>
-                        <p className="text-slate-500 italic mt-1">{addr.details}</p>
+                        <p className="text-muted-foreground italic mt-1">{addr.details}</p>
                       </div>
 
-                      <div className="pt-2 flex items-center justify-between border-t border-slate-100">
+                      <div className="pt-2 flex items-center justify-between border-t border-border">
                         {!addr.isDefault ? (
                           <button
                             onClick={() => {
@@ -1348,12 +1373,12 @@ export function CustomerDashboard() {
                               );
                               toast.success("Default address updated");
                             }}
-                            className="text-xs font-semibold text-sky-600 hover:underline cursor-pointer"
+                            className="text-xs font-semibold text-primary hover:underline cursor-pointer"
                           >
                             Set as default
                           </button>
                         ) : (
-                          <span className="text-xs text-slate-400">Primary delivery address</span>
+                          <span className="text-xs text-muted-foreground/60">Primary delivery address</span>
                         )}
 
                         <button
@@ -1379,8 +1404,8 @@ export function CustomerDashboard() {
               <div className="space-y-6 max-w-2xl animate-in fade-in-50 duration-200">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-slate-900">Account Notifications</h1>
-                    <p className="text-sm text-slate-500 mt-1">Updates on your equipment orders and quotes</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">Account Notifications</h1>
+                    <p className="text-sm text-muted-foreground mt-1">Updates on your equipment orders and quotes</p>
                   </div>
                   {unreadNotificationsCount > 0 && (
                     <Button
@@ -1390,31 +1415,31 @@ export function CustomerDashboard() {
                         setNotifications(notifications.map((n) => ({ ...n, read: true })));
                         toast.success("All marked as read");
                       }}
-                      className="text-xs text-sky-600 border-sky-200"
+                      className="text-xs text-primary border-primary/20"
                     >
                       Mark all as read
                     </Button>
                   )}
                 </div>
 
-                <div className="bg-white border border-slate-100 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                  {notifications.map((n) => (
+                <div className="bg-card border border-border rounded-2xl divide-y divide-border shadow-xs overflow-hidden">
+                  {displayNotifications.map((n) => (
                     <div
                       key={n.id}
                       className={cn(
                         "p-4 flex items-start gap-3.5 transition-colors",
-                        !n.read ? "bg-sky-50/40" : "hover:bg-slate-50/60",
+                        !n.read ? "bg-primary/5" : "hover:bg-muted/40",
                       )}
                     >
-                      <div className="h-9 w-9 rounded-xl bg-sky-50 flex items-center justify-center text-sky-600 shrink-0 mt-0.5">
+                      <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary shrink-0 mt-0.5">
                         <Bell className="h-4 w-4" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between">
-                          <p className="text-sm font-semibold text-slate-900">{n.title}</p>
-                          <span className="text-[11px] text-slate-400">{n.date}</span>
+                          <p className="text-sm font-semibold text-foreground">{n.title}</p>
+                          <span className="text-[11px] text-muted-foreground/60">{n.date}</span>
                         </div>
-                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">{n.message}</p>
+                        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{n.message}</p>
                       </div>
                     </div>
                   ))}
@@ -1428,44 +1453,44 @@ export function CustomerDashboard() {
             {activeTab === "support" && (
               <div className="space-y-6 max-w-3xl animate-in fade-in-50 duration-200">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-slate-900">Customer Support</h1>
-                  <p className="text-sm text-slate-500 mt-1">Direct contact with Polar Fiber engineering and sales engineers</p>
+                  <h1 className="text-2xl font-bold tracking-tight text-foreground">Customer Support</h1>
+                  <p className="text-sm text-muted-foreground mt-1">Direct contact with Polar Fiber engineering and sales engineers</p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs space-y-2">
-                    <div className="h-10 w-10 rounded-xl bg-sky-50 flex items-center justify-center text-sky-600">
+                  <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-2">
+                    <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
                       <Phone className="h-5 w-5" />
                     </div>
-                    <h3 className="font-bold text-slate-900">Direct Sales & Helpdesk</h3>
-                    <p className="text-xs text-slate-500">Available Monday - Saturday, 8:00 AM - 6:00 PM</p>
-                    <p className="font-semibold text-sm text-sky-600 pt-1">+251 911 234 567</p>
+                    <h3 className="font-bold text-foreground">Direct Sales & Helpdesk</h3>
+                    <p className="text-xs text-muted-foreground">Available Monday - Saturday, 8:00 AM - 6:00 PM</p>
+                    <p className="font-semibold text-sm text-primary pt-1">+251 911 234 567</p>
                   </div>
 
-                  <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs space-y-2">
+                  <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-2">
                     <div className="h-10 w-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
                       <Mail className="h-5 w-5" />
                     </div>
-                    <h3 className="font-bold text-slate-900">Engineering Support Email</h3>
-                    <p className="text-xs text-slate-500">Send technical drawings and specs</p>
+                    <h3 className="font-bold text-foreground">Engineering Support Email</h3>
+                    <p className="text-xs text-muted-foreground">Send technical drawings and specs</p>
                     <p className="font-semibold text-sm text-emerald-600 pt-1">support@polarfiber.et</p>
                   </div>
                 </div>
 
-                <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs space-y-4">
-                  <h3 className="font-bold text-base text-slate-900 border-b border-slate-100 pb-3">
+                <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4">
+                  <h3 className="font-bold text-base text-foreground border-b border-border pb-3">
                     Frequently Asked Technical Questions
                   </h3>
                   <div className="space-y-3 text-sm">
-                    <div className="p-3.5 rounded-xl bg-slate-50">
-                      <p className="font-semibold text-slate-900 text-xs">How do I maintain my fiberglass water tanker?</p>
-                      <p className="text-xs text-slate-600 mt-1">
+                    <div className="p-3.5 rounded-xl bg-muted/50">
+                      <p className="font-semibold text-foreground text-xs">How do I maintain my fiberglass water tanker?</p>
+                      <p className="text-xs text-muted-foreground mt-1">
                         Polar Fiber water tankers feature food-grade gelcoat linings that resist algae and bacterial growth. Simply flush with clean potable water once every six months.
                       </p>
                     </div>
-                    <div className="p-3.5 rounded-xl bg-slate-50">
-                      <p className="font-semibold text-slate-900 text-xs">What is the warranty period for roofing sheets?</p>
-                      <p className="text-xs text-slate-600 mt-1">
+                    <div className="p-3.5 rounded-xl bg-muted/50">
+                      <p className="font-semibold text-foreground text-xs">What is the warranty period for roofing sheets?</p>
+                      <p className="text-xs text-muted-foreground mt-1">
                         Our reinforced fiberglass corrugated sheets come with a 15-year weather and UV resistance manufacturer warranty.
                       </p>
                     </div>
@@ -1488,12 +1513,12 @@ export function CustomerDashboard() {
 
       {/* Add Address Dialog */}
       {newAddressDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4">
           <form
             onSubmit={handleAddAddress}
-            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4"
+            className="w-full max-w-md rounded-2xl bg-card p-6 shadow-2xl space-y-4"
           >
-            <h3 className="font-bold text-lg text-slate-900">Add New Delivery Location</h3>
+            <h3 className="font-bold text-lg text-foreground">Add New Delivery Location</h3>
             <div className="space-y-3">
               <div>
                 <Label className="text-xs">Location Name / Label</Label>
@@ -1543,7 +1568,7 @@ export function CustomerDashboard() {
               <Button type="button" variant="ghost" onClick={() => setNewAddressDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" className="bg-sky-600 hover:bg-sky-700 text-white">
+              <Button type="submit" className="bg-primary hover:bg-primary/90 text-primary-foreground">
                 Save Address
               </Button>
             </div>
@@ -1553,19 +1578,19 @@ export function CustomerDashboard() {
 
       {/* New Message Dialog */}
       {newMessageDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4">
           <form
             onSubmit={handleCreateNewConversation}
-            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4"
+            className="w-full max-w-md rounded-2xl bg-card p-6 shadow-2xl space-y-4"
           >
-            <h3 className="font-bold text-lg text-slate-900">New Message to Polar Fiber</h3>
+            <h3 className="font-bold text-lg text-foreground">New Message to Polar Fiber</h3>
             <div className="space-y-3">
               <div>
-                <Label className="text-xs font-semibold text-slate-600">Department / Topic</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">Department / Topic</Label>
                 <select
                   value={newMessageForm.topic}
                   onChange={(e) => setNewMessageForm({ ...newMessageForm, topic: e.target.value })}
-                  className="w-full h-10 rounded-lg border border-slate-200 px-3 text-sm mt-1"
+                  className="w-full h-10 rounded-lg border border-border px-3 text-sm mt-1"
                 >
                   <option value="General Inquiry">General Inquiry</option>
                   <option value="Custom Engineering">Custom Engineering</option>
@@ -1575,7 +1600,7 @@ export function CustomerDashboard() {
                 </select>
               </div>
               <div>
-                <Label className="text-xs font-semibold text-slate-600">Subject</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">Subject</Label>
                 <Input
                   value={newMessageForm.subject}
                   onChange={(e) => setNewMessageForm({ ...newMessageForm, subject: e.target.value })}
@@ -1585,13 +1610,13 @@ export function CustomerDashboard() {
                 />
               </div>
               <div>
-                <Label className="text-xs font-semibold text-slate-600">Message</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">Message</Label>
                 <textarea
                   rows={4}
                   value={newMessageForm.text}
                   onChange={(e) => setNewMessageForm({ ...newMessageForm, text: e.target.value })}
                   placeholder="Write your question or request..."
-                  className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:outline-sky-500 mt-1"
+                  className="w-full rounded-xl border border-border p-3 text-sm focus:outline-primary mt-1"
                   required
                 />
               </div>
@@ -1600,7 +1625,7 @@ export function CustomerDashboard() {
               <Button type="button" variant="ghost" onClick={() => setNewMessageDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" className="bg-sky-600 hover:bg-sky-700 text-white gap-1.5">
+              <Button type="submit" className="bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5">
                 <Send className="h-3.5 w-3.5" />
                 Send Message
               </Button>

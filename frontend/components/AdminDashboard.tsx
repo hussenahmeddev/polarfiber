@@ -92,6 +92,9 @@ import {
   setOrderStatus,
   setQuoteStatus,
   updateProductStock,
+  replyContactMessage,
+  replySupportTicket,
+  getAuditLogs,
 } from "@/backend/api.functions";
 
 const PIE_COLORS = ["#0ea5e9", "#6366f1", "#10b981", "#f59e0b", "#f43f5e"];
@@ -318,8 +321,17 @@ export function AdminDashboard() {
   const mutateOrderStatus = useServerFn(setOrderStatus);
   const mutateQuoteStatus = useServerFn(setQuoteStatus);
   const mutateStock = useServerFn(updateProductStock);
+  const mutateReplyMessage = useServerFn(replyContactMessage);
+  const mutateReplyTicket = useServerFn(replySupportTicket);
+  const fetchAuditLogs = useServerFn(getAuditLogs);
 
   // Queries
+  const auditLogsQuery = useQuery({
+    queryKey: ["admin", "audit-logs"],
+    queryFn: () => fetchAuditLogs(),
+    enabled: user?.role === "admin" && activeTab === "audit-logs",
+  });
+
   const overviewQuery = useQuery({
     queryKey: ["admin", "overview"],
     queryFn: () => fetchOverview(),
@@ -362,14 +374,14 @@ export function AdminDashboard() {
   if (!user || user.role !== "admin") {
     return (
       <div className="mx-auto max-w-md px-4 py-24 text-center">
-        <div className="flex h-14 w-14 mx-auto items-center justify-center rounded-2xl bg-rose-50 text-rose-600 shadow-xs">
+        <div className="flex h-14 w-14 mx-auto items-center justify-center rounded-2xl bg-destructive/10 text-destructive shadow-xs">
           <AlertTriangle className="h-7 w-7" />
         </div>
-        <h1 className="mt-4 text-2xl font-bold text-slate-900">Administrator Access Required</h1>
-        <p className="mt-2 text-sm text-slate-500">
+        <h1 className="mt-4 text-2xl font-bold text-foreground">Administrator Access Required</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
           You must be logged in with an administrator account to access this management dashboard.
         </p>
-        <Button asChild className="mt-6 w-full bg-sky-600 hover:bg-sky-700 text-white">
+        <Button asChild className="mt-6 w-full bg-primary hover:bg-primary/90 text-primary-foreground">
           <Link to="/login">Sign In with Admin Account</Link>
         </Button>
       </div>
@@ -618,7 +630,26 @@ export function AdminDashboard() {
   });
 
   // Filtering audit logs
-  const filteredLogs = logs.filter((l) => {
+  const combinedLogs: AuditLogEntry[] = React.useMemo(() => {
+    if (!auditLogsQuery.data || !auditLogsQuery.data.length) return logs;
+    const dbLogs: AuditLogEntry[] = auditLogsQuery.data.map((l) => ({
+      id: `LOG-${l.id}`,
+      timestamp: String(l.created_at || ""),
+      actor: l.actor_name || "Admin",
+      action: l.action,
+      category: (l.entity_type === "order"
+        ? "Orders"
+        : l.entity_type === "product"
+          ? "Catalog"
+          : l.entity_type === "quote"
+            ? "Quotes"
+            : "System") as AuditLogEntry["category"],
+      details: `${l.action} on ${l.entity_type} #${l.entity_id}`,
+    }));
+    return [...dbLogs, ...logs];
+  }, [auditLogsQuery.data, logs]);
+
+  const filteredLogs = combinedLogs.filter((l) => {
     return logCategoryFilter === "all" || l.category === logCategoryFilter;
   });
 
@@ -639,8 +670,8 @@ export function AdminDashboard() {
         <div className="space-y-7 animate-in fade-in-50 duration-200">
           {/* Header Title & Subtitle */}
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Dashboard Overview</h1>
-            <p className="text-sm text-slate-500 mt-1">Monitor your business at a glance</p>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Dashboard Overview</h1>
+            <p className="text-sm text-muted-foreground mt-1">Monitor your business at a glance</p>
           </div>
 
           {/* 8 Stat Cards in 4x2 Grid */}
@@ -648,13 +679,13 @@ export function AdminDashboard() {
             {/* 1. Total Orders */}
             <div
               onClick={() => setActiveTab("orders")}
-              className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+              className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
             >
               <div>
-                <p className="text-xs font-semibold text-slate-500">Total Orders</p>
-                <p className="text-3xl font-bold text-slate-900 mt-1.5">{kpis?.totalOrders ?? 0}</p>
+                <p className="text-xs font-semibold text-muted-foreground">Total Orders</p>
+                <p className="text-3xl font-bold text-foreground mt-1.5">{kpis?.totalOrders ?? 0}</p>
               </div>
-              <div className="h-13 w-13 rounded-2xl bg-sky-50 flex items-center justify-center text-sky-500 group-hover:scale-105 transition-transform">
+              <div className="h-13 w-13 rounded-2xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
                 <ShoppingCart className="h-6 w-6 stroke-[2]" />
               </div>
             </div>
@@ -665,11 +696,11 @@ export function AdminDashboard() {
                 setOrdersStatus("Pending");
                 setActiveTab("orders");
               }}
-              className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+              className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
             >
               <div>
-                <p className="text-xs font-semibold text-slate-500">Pending Orders</p>
-                <p className="text-3xl font-bold text-slate-900 mt-1.5">
+                <p className="text-xs font-semibold text-muted-foreground">Pending Orders</p>
+                <p className="text-3xl font-bold text-foreground mt-1.5">
                   {attention?.pendingOrders.length ?? 0}
                 </p>
               </div>
@@ -679,10 +710,10 @@ export function AdminDashboard() {
             </div>
 
             {/* 3. Revenue (Delivered) */}
-            <div className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200">
+            <div className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border">
               <div>
-                <p className="text-xs font-semibold text-slate-500">Revenue (Delivered)</p>
-                <p className="text-2xl font-bold text-slate-900 mt-1.5">
+                <p className="text-xs font-semibold text-muted-foreground">Revenue (Delivered)</p>
+                <p className="text-2xl font-bold text-foreground mt-1.5">
                   {etb(deliveredRevenue)}
                 </p>
               </div>
@@ -697,11 +728,11 @@ export function AdminDashboard() {
                 setQuoteFilter("New");
                 setActiveTab("quotes");
               }}
-              className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+              className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
             >
               <div>
-                <p className="text-xs font-semibold text-slate-500">Pending Quotes</p>
-                <p className="text-3xl font-bold text-slate-900 mt-1.5">
+                <p className="text-xs font-semibold text-muted-foreground">Pending Quotes</p>
+                <p className="text-3xl font-bold text-foreground mt-1.5">
                   {attention?.newQuotes.length ?? 0}
                 </p>
               </div>
@@ -713,11 +744,11 @@ export function AdminDashboard() {
             {/* 5. Customers */}
             <div
               onClick={() => setActiveTab("customers")}
-              className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+              className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
             >
               <div>
-                <p className="text-xs font-semibold text-slate-500">Customers</p>
-                <p className="text-3xl font-bold text-slate-900 mt-1.5">{allCustomers.length}</p>
+                <p className="text-xs font-semibold text-muted-foreground">Customers</p>
+                <p className="text-3xl font-bold text-foreground mt-1.5">{allCustomers.length}</p>
               </div>
               <div className="h-13 w-13 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-500 group-hover:scale-105 transition-transform">
                 <Users className="h-6 w-6 stroke-[2]" />
@@ -727,11 +758,11 @@ export function AdminDashboard() {
             {/* 6. Low Stock */}
             <div
               onClick={() => setActiveTab("inventory")}
-              className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+              className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
             >
               <div>
-                <p className="text-xs font-semibold text-slate-500">Low Stock</p>
-                <p className="text-3xl font-bold text-slate-900 mt-1.5">{lowStockCount}</p>
+                <p className="text-xs font-semibold text-muted-foreground">Low Stock</p>
+                <p className="text-3xl font-bold text-foreground mt-1.5">{lowStockCount}</p>
               </div>
               <div className="h-13 w-13 rounded-2xl bg-orange-50 flex items-center justify-center text-orange-500 group-hover:scale-105 transition-transform">
                 <AlertTriangle className="h-6 w-6 stroke-[2]" />
@@ -741,11 +772,11 @@ export function AdminDashboard() {
             {/* 7. New Messages */}
             <div
               onClick={() => setActiveTab("messages")}
-              className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+              className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
             >
               <div>
-                <p className="text-xs font-semibold text-slate-500">New Messages</p>
-                <p className="text-3xl font-bold text-slate-900 mt-1.5">{unreadMessagesCount}</p>
+                <p className="text-xs font-semibold text-muted-foreground">New Messages</p>
+                <p className="text-3xl font-bold text-foreground mt-1.5">{unreadMessagesCount}</p>
               </div>
               <div className="h-13 w-13 rounded-2xl bg-purple-50 flex items-center justify-center text-purple-500 group-hover:scale-105 transition-transform">
                 <Bell className="h-6 w-6 stroke-[2]" />
@@ -758,11 +789,11 @@ export function AdminDashboard() {
                 setOrdersStatus("Delivered");
                 setActiveTab("orders");
               }}
-              className="group bg-white border border-slate-100 rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-slate-200 cursor-pointer"
+              className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
             >
               <div>
-                <p className="text-xs font-semibold text-slate-500">Completed Orders</p>
-                <p className="text-3xl font-bold text-slate-900 mt-1.5">{completedOrdersCount}</p>
+                <p className="text-xs font-semibold text-muted-foreground">Completed Orders</p>
+                <p className="text-3xl font-bold text-foreground mt-1.5">{completedOrdersCount}</p>
               </div>
               <div className="h-13 w-13 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-500 group-hover:scale-105 transition-transform">
                 <CheckCircle2 className="h-6 w-6 stroke-[2]" />
@@ -773,14 +804,14 @@ export function AdminDashboard() {
           {/* Lower 2 Cards: Recent Orders & Recent Quotes */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Recent Orders Card */}
-            <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs flex flex-col justify-between">
+            <div className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-                  <h2 className="text-base font-bold text-slate-900">Recent Orders</h2>
+                <div className="flex items-center justify-between pb-4 border-b border-border">
+                  <h2 className="text-base font-bold text-foreground">Recent Orders</h2>
                   {recentOrdersList.length > 0 && (
                     <button
                       onClick={() => setActiveTab("orders")}
-                      className="text-xs font-semibold text-sky-600 hover:text-sky-700 cursor-pointer"
+                      className="text-xs font-semibold text-primary hover:text-primary/80 cursor-pointer"
                     >
                       View all
                     </button>
@@ -789,11 +820,11 @@ export function AdminDashboard() {
 
                 <div className="pt-4">
                   {recentOrdersList.length === 0 ? (
-                    <div className="py-12 text-slate-400 text-sm font-normal">
+                    <div className="py-12 text-muted-foreground/60 text-sm font-normal">
                       No orders yet.
                     </div>
                   ) : (
-                    <div className="divide-y divide-slate-100">
+                    <div className="divide-y divide-border">
                       {recentOrdersList.map((ord) => (
                         <div
                           key={ord.order_id}
@@ -801,18 +832,18 @@ export function AdminDashboard() {
                             setSelectedOrder(ord);
                             setOrderDrawerOpen(true);
                           }}
-                          className="py-3 flex items-center justify-between hover:bg-slate-50 px-2 rounded-xl transition-colors cursor-pointer"
+                          className="py-3 flex items-center justify-between hover:bg-muted/50 px-2 rounded-xl transition-colors cursor-pointer"
                         >
                           <div>
                             <div className="flex items-center gap-2">
-                              <span className="font-semibold text-sm text-slate-900">
+                              <span className="font-semibold text-sm text-foreground">
                                 Order #{ord.order_id}
                               </span>
                               <StatusBadge s={ord.status} />
                             </div>
-                            <p className="text-xs text-slate-500 mt-0.5">{ord.customer ?? "Guest"}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">{ord.customer ?? "Guest"}</p>
                           </div>
-                          <span className="text-sm font-bold text-sky-600">{etb(ord.total)}</span>
+                          <span className="text-sm font-bold text-primary">{etb(ord.total)}</span>
                         </div>
                       ))}
                     </div>
@@ -821,12 +852,12 @@ export function AdminDashboard() {
               </div>
 
               {recentOrdersList.length === 0 && (
-                <div className="pt-4 border-t border-slate-50 flex justify-end">
+                <div className="pt-4 border-t border-border/40 flex justify-end">
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() => setActiveTab("orders")}
-                    className="text-xs text-slate-600"
+                    className="text-xs text-muted-foreground"
                   >
                     Open Orders Manager
                   </Button>
@@ -835,14 +866,14 @@ export function AdminDashboard() {
             </div>
 
             {/* Recent Quotes Card */}
-            <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs flex flex-col justify-between">
+            <div className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-                  <h2 className="text-base font-bold text-slate-900">Recent Quotes</h2>
+                <div className="flex items-center justify-between pb-4 border-b border-border">
+                  <h2 className="text-base font-bold text-foreground">Recent Quotes</h2>
                   {recentQuotesList.length > 0 && (
                     <button
                       onClick={() => setActiveTab("quotes")}
-                      className="text-xs font-semibold text-sky-600 hover:text-sky-700 cursor-pointer"
+                      className="text-xs font-semibold text-primary hover:text-primary/80 cursor-pointer"
                     >
                       View all
                     </button>
@@ -851,11 +882,11 @@ export function AdminDashboard() {
 
                 <div className="pt-4">
                   {recentQuotesList.length === 0 ? (
-                    <div className="py-12 text-slate-400 text-sm font-normal">
+                    <div className="py-12 text-muted-foreground/60 text-sm font-normal">
                       No quotes yet.
                     </div>
                   ) : (
-                    <div className="divide-y divide-slate-100">
+                    <div className="divide-y divide-border">
                       {recentQuotesList.map((q) => (
                         <div
                           key={q.quote_id}
@@ -863,20 +894,20 @@ export function AdminDashboard() {
                             setSelectedQuote(q);
                             setActiveTab("quotes");
                           }}
-                          className="py-3 flex items-center justify-between hover:bg-slate-50 px-2 rounded-xl transition-colors cursor-pointer"
+                          className="py-3 flex items-center justify-between hover:bg-muted/50 px-2 rounded-xl transition-colors cursor-pointer"
                         >
                           <div className="min-w-0 pr-2">
                             <div className="flex items-center gap-2">
-                              <span className="font-semibold text-sm text-slate-900 truncate">
+                              <span className="font-semibold text-sm text-foreground truncate">
                                 {q.subject}
                               </span>
                               <StatusBadge s={q.status} />
                             </div>
-                            <p className="text-xs text-slate-500 mt-0.5 truncate">
+                            <p className="text-xs text-muted-foreground mt-0.5 truncate">
                               {q.name} · {q.created_at}
                             </p>
                           </div>
-                          <Button size="sm" variant="ghost" className="text-xs text-sky-600 shrink-0">
+                          <Button size="sm" variant="ghost" className="text-xs text-primary shrink-0">
                             Inspect
                           </Button>
                         </div>
@@ -887,12 +918,12 @@ export function AdminDashboard() {
               </div>
 
               {recentQuotesList.length === 0 && (
-                <div className="pt-4 border-t border-slate-50 flex justify-end">
+                <div className="pt-4 border-t border-border/40 flex justify-end">
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() => setActiveTab("quotes")}
-                    className="text-xs text-slate-600"
+                    className="text-xs text-muted-foreground"
                   >
                     Open Quotes Manager
                   </Button>
@@ -910,15 +941,15 @@ export function AdminDashboard() {
         <div className="space-y-6 animate-in fade-in-50 duration-200">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">Products Catalog</h1>
-              <p className="text-sm text-slate-500 mt-1">Manage fiberglass listings, technical specs, and prices</p>
+              <h1 className="text-2xl font-bold tracking-tight text-foreground">Products Catalog</h1>
+              <p className="text-sm text-muted-foreground mt-1">Manage fiberglass listings, technical specs, and prices</p>
             </div>
             <Button
               onClick={() => {
                 setEditingProduct(null);
                 setProductDialogOpen(true);
               }}
-              className="bg-sky-600 hover:bg-sky-700 text-white gap-2 shadow-xs"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 shadow-xs"
             >
               <Plus className="h-4 w-4" />
               Add Product
@@ -927,18 +958,18 @@ export function AdminDashboard() {
 
           <div className="flex flex-col sm:flex-row items-center gap-3">
             <div className="relative flex-1 w-full sm:max-w-xs">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
               <Input
                 placeholder="Search products by name or description..."
                 value={productSearch}
                 onChange={(e) => setProductSearch(e.target.value)}
-                className="pl-9 bg-white border-slate-200"
+                className="pl-9 bg-card border-border"
               />
             </div>
             <select
               value={productCategoryFilter}
               onChange={(e) => setProductCategoryFilter(e.target.value)}
-              className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700"
+              className="h-10 rounded-lg border border-border bg-card px-3 text-sm font-medium text-muted-foreground"
             >
               <option value="all">All Categories</option>
               {CATEGORIES.map((c) => (
@@ -949,10 +980,10 @@ export function AdminDashboard() {
             </select>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
+          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
-                <thead className="border-b border-slate-100 bg-slate-50/70 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   <tr>
                     <th className="px-5 py-4">Product Details</th>
                     <th className="px-5 py-4">Category</th>
@@ -962,10 +993,10 @@ export function AdminDashboard() {
                     <th className="px-5 py-4 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-border">
                   {filteredProducts.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-12 text-center text-slate-400 text-sm">
+                      <td colSpan={6} className="py-12 text-center text-muted-foreground/60 text-sm">
                         No products match your search criteria.
                       </td>
                     </tr>
@@ -973,29 +1004,29 @@ export function AdminDashboard() {
                     filteredProducts.map((p) => {
                       const isLow = p.stock <= 5;
                       return (
-                        <tr key={p.product_id} className="hover:bg-slate-50/60 transition-colors">
+                        <tr key={p.product_id} className="hover:bg-muted/50/60 transition-colors">
                           <td className="px-5 py-4">
                             <div className="flex items-center gap-3.5">
                               {p.image ? (
                                 <img
                                   src={p.image}
                                   alt={p.name}
-                                  className="h-11 w-11 rounded-xl object-cover border border-slate-100"
+                                  className="h-11 w-11 rounded-xl object-cover border border-border"
                                 />
                               ) : (
-                                <div className="h-11 w-11 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400">
+                                <div className="h-11 w-11 rounded-xl bg-muted flex items-center justify-center text-muted-foreground/60">
                                   <Package className="h-5 w-5" />
                                 </div>
                               )}
                               <div>
-                                <p className="font-semibold text-slate-900">{p.name}</p>
-                                <p className="text-xs text-slate-500 line-clamp-1 max-w-xs">{p.description}</p>
+                                <p className="font-semibold text-foreground">{p.name}</p>
+                                <p className="text-xs text-muted-foreground line-clamp-1 max-w-xs">{p.description}</p>
                               </div>
                             </div>
                           </td>
-                          <td className="px-5 py-4 text-slate-600 font-medium">{p.category}</td>
-                          <td className="px-5 py-4 text-slate-500">{p.capacity || "—"}</td>
-                          <td className="px-5 py-4 font-bold text-sky-600">{etb(p.price)}</td>
+                          <td className="px-5 py-4 text-muted-foreground font-medium">{p.category}</td>
+                          <td className="px-5 py-4 text-muted-foreground">{p.capacity || "—"}</td>
+                          <td className="px-5 py-4 font-bold text-primary">{etb(p.price)}</td>
                           <td className="px-5 py-4">
                             <span
                               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
@@ -1017,7 +1048,7 @@ export function AdminDashboard() {
                                   setEditingProduct(p);
                                   setProductDialogOpen(true);
                                 }}
-                                className="h-8 w-8 p-0 text-slate-500 hover:text-sky-600"
+                                className="h-8 w-8 p-0 text-muted-foreground hover:text-primary"
                               >
                                 <Pencil className="h-4 w-4" />
                               </Button>
@@ -1028,7 +1059,7 @@ export function AdminDashboard() {
                                   setDeletingProduct(p);
                                   setConfirmDeleteDialogOpen(true);
                                 }}
-                                className="h-8 w-8 p-0 text-slate-500 hover:text-rose-600"
+                                className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-600"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
@@ -1051,8 +1082,8 @@ export function AdminDashboard() {
       {activeTab === "categories" && (
         <div className="space-y-6 animate-in fade-in-50 duration-200">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Product Categories</h1>
-            <p className="text-sm text-slate-500 mt-1">Manage fiberglass manufacturing lines and taxonomy</p>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Product Categories</h1>
+            <p className="text-sm text-muted-foreground mt-1">Manage fiberglass manufacturing lines and taxonomy</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -1063,23 +1094,23 @@ export function AdminDashboard() {
               return (
                 <div
                   key={catName}
-                  className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow"
+                  className="bg-card border border-border rounded-2xl p-6 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow"
                 >
                   <div>
-                    <div className="h-12 w-12 rounded-xl bg-sky-50 flex items-center justify-center text-sky-600 mb-4">
+                    <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary mb-4">
                       <Layers className="h-6 w-6" />
                     </div>
-                    <h3 className="font-bold text-base text-slate-900">{catName}</h3>
-                    <p className="text-xs text-slate-500 mt-1">
+                    <h3 className="font-bold text-base text-foreground">{catName}</h3>
+                    <p className="text-xs text-muted-foreground mt-1">
                       Reinforced structural composite manufacturing specifications for Ethiopian industrial and domestic sectors.
                     </p>
-                    <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between text-xs font-semibold">
-                      <span className="text-slate-500">Listed Products:</span>
-                      <span className="text-slate-900">{catProds.length} SKUs</span>
+                    <div className="mt-4 pt-4 border-t border-border flex items-center justify-between text-xs font-semibold">
+                      <span className="text-muted-foreground">Listed Products:</span>
+                      <span className="text-foreground">{catProds.length} SKUs</span>
                     </div>
                     <div className="mt-1 flex items-center justify-between text-xs font-semibold">
-                      <span className="text-slate-500">Warehouse Units:</span>
-                      <span className="text-sky-600">{catStock} units</span>
+                      <span className="text-muted-foreground">Warehouse Units:</span>
+                      <span className="text-primary">{catStock} units</span>
                     </div>
                   </div>
 
@@ -1090,7 +1121,7 @@ export function AdminDashboard() {
                       setProductCategoryFilter(catName);
                       setActiveTab("products");
                     }}
-                    className="mt-5 w-full text-xs font-semibold text-sky-600 border-sky-200 hover:bg-sky-50"
+                    className="mt-5 w-full text-xs font-semibold text-primary border-primary/20 hover:bg-primary/10"
                   >
                     View Products in {catName}
                   </Button>
@@ -1107,45 +1138,45 @@ export function AdminDashboard() {
       {activeTab === "inventory" && (
         <div className="space-y-6 animate-in fade-in-50 duration-200">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Inventory Management</h1>
-            <p className="text-sm text-slate-500 mt-1">Track warehouse stock levels, low-stock alerts, and fast adjustments</p>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Inventory Management</h1>
+            <p className="text-sm text-muted-foreground mt-1">Track warehouse stock levels, low-stock alerts, and fast adjustments</p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4.5">
-            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-xs">
-              <p className="text-xs font-semibold text-slate-500">Total Catalog SKUs</p>
-              <p className="text-3xl font-bold text-slate-900 mt-1.5">{allProducts.length}</p>
+            <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
+              <p className="text-xs font-semibold text-muted-foreground">Total Catalog SKUs</p>
+              <p className="text-3xl font-bold text-foreground mt-1.5">{allProducts.length}</p>
             </div>
-            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-xs">
-              <p className="text-xs font-semibold text-slate-500">Total Units In Stock</p>
-              <p className="text-3xl font-bold text-sky-600 mt-1.5">{totalStockUnits}</p>
+            <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
+              <p className="text-xs font-semibold text-muted-foreground">Total Units In Stock</p>
+              <p className="text-3xl font-bold text-primary mt-1.5">{totalStockUnits}</p>
             </div>
-            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-xs">
-              <p className="text-xs font-semibold text-slate-500">Low Stock Warnings</p>
+            <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
+              <p className="text-xs font-semibold text-muted-foreground">Low Stock Warnings</p>
               <p className="text-3xl font-bold text-amber-500 mt-1.5">{lowStockCount}</p>
             </div>
-            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-xs">
-              <p className="text-xs font-semibold text-slate-500">Stock Inventory Value</p>
+            <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
+              <p className="text-xs font-semibold text-muted-foreground">Stock Inventory Value</p>
               <p className="text-2xl font-bold text-emerald-600 mt-1.5">{etb(totalStockValue)}</p>
             </div>
           </div>
 
           <div className="flex items-center justify-between">
             <div className="relative w-full max-w-xs">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
               <Input
                 placeholder="Filter by product name..."
                 value={inventorySearch}
                 onChange={(e) => setInventorySearch(e.target.value)}
-                className="pl-9 bg-white border-slate-200"
+                className="pl-9 bg-card border-border"
               />
             </div>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
+          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
-                <thead className="border-b border-slate-100 bg-slate-50/70 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   <tr>
                     <th className="px-5 py-4">Item</th>
                     <th className="px-5 py-4">Category</th>
@@ -1154,20 +1185,20 @@ export function AdminDashboard() {
                     <th className="px-5 py-4 text-right">Quick Restock / Adjust</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-border">
                   {filteredInventory.map((p) => {
                     const isUpdating = stockUpdatingId === p.product_id;
                     const isLow = p.stock <= 5;
                     const isOut = p.stock === 0;
 
                     return (
-                      <tr key={p.product_id} className="hover:bg-slate-50/60 transition-colors">
+                      <tr key={p.product_id} className="hover:bg-muted/50/60 transition-colors">
                         <td className="px-5 py-4">
-                          <p className="font-semibold text-slate-900">{p.name}</p>
-                          <p className="text-xs text-slate-400">Unit Price: {etb(p.price)}</p>
+                          <p className="font-semibold text-foreground">{p.name}</p>
+                          <p className="text-xs text-muted-foreground/60">Unit Price: {etb(p.price)}</p>
                         </td>
-                        <td className="px-5 py-4 text-slate-600">{p.category}</td>
-                        <td className="px-5 py-4 font-bold text-base text-slate-900">{p.stock} units</td>
+                        <td className="px-5 py-4 text-muted-foreground">{p.category}</td>
+                        <td className="px-5 py-4 font-bold text-base text-foreground">{p.stock} units</td>
                         <td className="px-5 py-4">
                           <span
                             className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
@@ -1197,7 +1228,7 @@ export function AdminDashboard() {
                               variant="outline"
                               disabled={isUpdating}
                               onClick={() => handleQuickStockAdjust(p, 1)}
-                              className="h-8 px-2 text-xs font-semibold text-sky-600"
+                              className="h-8 px-2 text-xs font-semibold text-primary"
                             >
                               +1
                             </Button>
@@ -1238,14 +1269,14 @@ export function AdminDashboard() {
         <div className="space-y-6 animate-in fade-in-50 duration-200">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">Order Management</h1>
-              <p className="text-sm text-slate-500 mt-1">Track customer orders, manage statuses, and export fulfillment records</p>
+              <h1 className="text-2xl font-bold tracking-tight text-foreground">Order Management</h1>
+              <p className="text-sm text-muted-foreground mt-1">Track customer orders, manage statuses, and export fulfillment records</p>
             </div>
             <Button
               size="sm"
               variant="outline"
               onClick={exportOrdersCSV}
-              className="gap-2 text-slate-700 bg-white"
+              className="gap-2 text-muted-foreground bg-card"
             >
               <Download className="h-4 w-4" />
               Export CSV
@@ -1254,7 +1285,7 @@ export function AdminDashboard() {
 
           <div className="flex flex-col sm:flex-row items-center gap-3">
             <div className="relative flex-1 w-full sm:max-w-xs">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
               <Input
                 placeholder="Search order #, customer, address..."
                 value={ordersSearch}
@@ -1262,7 +1293,7 @@ export function AdminDashboard() {
                   setOrdersSearch(e.target.value);
                   setOrdersPage(1);
                 }}
-                className="pl-9 bg-white border-slate-200"
+                className="pl-9 bg-card border-border"
               />
             </div>
             <select
@@ -1271,7 +1302,7 @@ export function AdminDashboard() {
                 setOrdersStatus(e.target.value);
                 setOrdersPage(1);
               }}
-              className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700"
+              className="h-10 rounded-lg border border-border bg-card px-3 text-sm font-medium text-muted-foreground"
             >
               <option value="all">All Statuses</option>
               {ORDER_STATUSES.map((st) => (
@@ -1282,10 +1313,10 @@ export function AdminDashboard() {
             </select>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
+          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
-                <thead className="border-b border-slate-100 bg-slate-50/70 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   <tr>
                     <th className="px-5 py-4">Order #</th>
                     <th className="px-5 py-4">Customer</th>
@@ -1296,10 +1327,10 @@ export function AdminDashboard() {
                     <th className="px-5 py-4 text-right">Action</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-border">
                   {allOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-400 text-sm">
+                      <td colSpan={7} className="py-12 text-center text-muted-foreground/60 text-sm">
                         No orders found matching the filter criteria.
                       </td>
                     </tr>
@@ -1311,20 +1342,20 @@ export function AdminDashboard() {
                           setSelectedOrder(o);
                           setOrderDrawerOpen(true);
                         }}
-                        className="hover:bg-slate-50/60 transition-colors cursor-pointer"
+                        className="hover:bg-muted/50/60 transition-colors cursor-pointer"
                       >
-                        <td className="px-5 py-4 font-bold text-slate-900">#{o.order_id}</td>
-                        <td className="px-5 py-4 font-semibold text-slate-800">{o.customer ?? "Guest"}</td>
-                        <td className="px-5 py-4 text-slate-500 text-xs">{o.created_at}</td>
-                        <td className="px-5 py-4 text-xs text-slate-600 max-w-xs truncate">
+                        <td className="px-5 py-4 font-bold text-foreground">#{o.order_id}</td>
+                        <td className="px-5 py-4 font-semibold text-foreground">{o.customer ?? "Guest"}</td>
+                        <td className="px-5 py-4 text-muted-foreground text-xs">{o.created_at}</td>
+                        <td className="px-5 py-4 text-xs text-muted-foreground max-w-xs truncate">
                           {o.items.map((i) => `${i.quantity}x ${i.product_name}`).join(", ")}
                         </td>
-                        <td className="px-5 py-4 font-bold text-sky-600">{etb(o.total)}</td>
+                        <td className="px-5 py-4 font-bold text-primary">{etb(o.total)}</td>
                         <td className="px-5 py-4">
                           <StatusBadge s={o.status} />
                         </td>
                         <td className="px-5 py-4 text-right">
-                          <Button size="sm" variant="ghost" className="text-xs text-sky-600 font-semibold">
+                          <Button size="sm" variant="ghost" className="text-xs text-primary font-semibold">
                             Manage
                           </Button>
                         </td>
@@ -1344,15 +1375,15 @@ export function AdminDashboard() {
       {activeTab === "quotes" && (
         <div className="space-y-6 animate-in fade-in-50 duration-200">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Customer Quote Requests</h1>
-            <p className="text-sm text-slate-500 mt-1">Review technical requests, send pricing quotations, and communicate with clients</p>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Customer Quote Requests</h1>
+            <p className="text-sm text-muted-foreground mt-1">Review technical requests, send pricing quotations, and communicate with clients</p>
           </div>
 
           <div className="flex items-center gap-3">
             <select
               value={quoteFilter}
               onChange={(e) => setQuoteFilter(e.target.value)}
-              className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700"
+              className="h-10 rounded-lg border border-border bg-card px-3 text-sm font-medium text-muted-foreground"
             >
               <option value="all">All Quote Statuses</option>
               {QUOTE_STATUSES.map((st) => (
@@ -1365,13 +1396,13 @@ export function AdminDashboard() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Inbox */}
-            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-xs space-y-3">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+            <div className="bg-card border border-border rounded-2xl p-5 shadow-xs space-y-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                 Inquiries Inbox ({filteredQuotes.length})
               </h3>
               <div className="space-y-2 max-h-[550px] overflow-y-auto pr-1">
                 {filteredQuotes.length === 0 ? (
-                  <p className="p-8 text-center text-xs text-slate-400">No quote requests found.</p>
+                  <p className="p-8 text-center text-xs text-muted-foreground/60">No quote requests found.</p>
                 ) : (
                   filteredQuotes.map((q) => {
                     const isSelected = selectedQuote?.quote_id === q.quote_id;
@@ -1382,17 +1413,17 @@ export function AdminDashboard() {
                         onClick={() => setSelectedQuote(q)}
                         className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
                           isSelected
-                            ? "border-sky-500 bg-sky-50/70 shadow-xs"
+                            ? "border-primary bg-primary/5 shadow-xs"
                             : isNew
-                              ? "border-amber-200 bg-amber-50/40 hover:bg-slate-50"
-                              : "border-slate-100 hover:bg-slate-50"
+                              ? "border-amber-200 bg-amber-50/40 hover:bg-muted/50"
+                              : "border-border hover:bg-muted/50"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <p className="font-semibold text-sm text-slate-900 truncate">{q.subject}</p>
+                          <p className="font-semibold text-sm text-foreground truncate">{q.subject}</p>
                           <StatusBadge s={q.status} />
                         </div>
-                        <p className="mt-1 text-xs text-slate-500 truncate">{q.name} · {q.created_at}</p>
+                        <p className="mt-1 text-xs text-muted-foreground truncate">{q.name} · {q.created_at}</p>
                       </div>
                     );
                   })
@@ -1401,45 +1432,45 @@ export function AdminDashboard() {
             </div>
 
             {/* Viewer */}
-            <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs lg:col-span-2">
+            <div className="bg-card border border-border rounded-2xl p-6 shadow-xs lg:col-span-2">
               {selectedQuote ? (
                 <div className="space-y-6 flex flex-col justify-between h-full">
                   <div className="space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                    <div className="flex items-center justify-between border-b border-border pb-4">
                       <div>
-                        <span className="text-xs text-slate-400">Inquiry #{selectedQuote.quote_id}</span>
-                        <h2 className="text-lg font-bold text-slate-900 mt-0.5">{selectedQuote.subject}</h2>
+                        <span className="text-xs text-muted-foreground/60">Inquiry #{selectedQuote.quote_id}</span>
+                        <h2 className="text-lg font-bold text-foreground mt-0.5">{selectedQuote.subject}</h2>
                       </div>
                       <StatusBadge s={selectedQuote.status} />
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 rounded-xl bg-slate-50 p-4 text-xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 rounded-xl bg-muted/50 p-4 text-xs">
                       <div>
-                        <span className="text-slate-400">Customer Name:</span>
-                        <p className="font-semibold text-slate-900 text-sm mt-0.5">{selectedQuote.name}</p>
+                        <span className="text-muted-foreground/60">Customer Name:</span>
+                        <p className="font-semibold text-foreground text-sm mt-0.5">{selectedQuote.name}</p>
                       </div>
                       <div>
-                        <span className="text-slate-400">Email:</span>
-                        <p className="font-semibold text-sky-600 text-sm mt-0.5">{selectedQuote.email}</p>
+                        <span className="text-muted-foreground/60">Email:</span>
+                        <p className="font-semibold text-primary text-sm mt-0.5">{selectedQuote.email}</p>
                       </div>
                       <div>
-                        <span className="text-slate-400">Submission Date:</span>
-                        <p className="font-semibold text-slate-800 mt-0.5">{selectedQuote.created_at}</p>
+                        <span className="text-muted-foreground/60">Submission Date:</span>
+                        <p className="font-semibold text-foreground mt-0.5">{selectedQuote.created_at}</p>
                       </div>
                     </div>
 
                     <div>
-                      <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                         Client Message / Requirements
                       </h4>
-                      <div className="mt-2 rounded-xl border border-slate-100 bg-white p-4 text-sm leading-relaxed text-slate-800 whitespace-pre-wrap">
+                      <div className="mt-2 rounded-xl border border-border bg-card p-4 text-sm leading-relaxed text-foreground whitespace-pre-wrap">
                         {selectedQuote.message}
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-                    <Button asChild size="sm" className="bg-sky-600 hover:bg-sky-700 text-white gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                    <Button asChild size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2">
                       <a href={`mailto:${selectedQuote.email}?subject=RE: ${encodeURIComponent(selectedQuote.subject)}`}>
                         <Mail className="h-4 w-4" />
                         Reply by Email
@@ -1484,24 +1515,24 @@ export function AdminDashboard() {
       {activeTab === "customers" && (
         <div className="space-y-6 animate-in fade-in-50 duration-200">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Customer Directory</h1>
-            <p className="text-sm text-slate-500 mt-1">Review registered client accounts, order counts, and lifetime spending</p>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Customer Directory</h1>
+            <p className="text-sm text-muted-foreground mt-1">Review registered client accounts, order counts, and lifetime spending</p>
           </div>
 
           <div className="relative w-full max-w-xs">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
             <Input
               placeholder="Search by customer name, email..."
               value={customerSearch}
               onChange={(e) => setCustomerSearch(e.target.value)}
-              className="pl-9 bg-white border-slate-200"
+              className="pl-9 bg-card border-border"
             />
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
+          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
-                <thead className="border-b border-slate-100 bg-slate-50/70 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   <tr>
                     <th className="px-5 py-4">Customer Name</th>
                     <th className="px-5 py-4">Email</th>
@@ -1512,33 +1543,33 @@ export function AdminDashboard() {
                     <th className="px-5 py-4">Joined</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-border">
                   {filteredCustomers.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-400 text-sm">
+                      <td colSpan={7} className="py-12 text-center text-muted-foreground/60 text-sm">
                         No customer accounts found.
                       </td>
                     </tr>
                   ) : (
                     filteredCustomers.map((c) => (
-                      <tr key={c.user_id} className="hover:bg-slate-50/60 transition-colors">
-                        <td className="px-5 py-4 font-semibold text-slate-900">{c.name}</td>
-                        <td className="px-5 py-4 text-slate-600">{c.email}</td>
-                        <td className="px-5 py-4 text-slate-500">{c.phone || "—"}</td>
+                      <tr key={c.user_id} className="hover:bg-muted/50/60 transition-colors">
+                        <td className="px-5 py-4 font-semibold text-foreground">{c.name}</td>
+                        <td className="px-5 py-4 text-muted-foreground">{c.email}</td>
+                        <td className="px-5 py-4 text-muted-foreground">{c.phone || "—"}</td>
                         <td className="px-5 py-4">
                           <span
                             className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
                               c.role === "admin"
-                                ? "bg-sky-100 text-sky-800"
-                                : "bg-slate-100 text-slate-700"
+                                ? "bg-primary/15 text-primary"
+                                : "bg-muted text-muted-foreground"
                             }`}
                           >
                             {c.role}
                           </span>
                         </td>
-                        <td className="px-5 py-4 font-semibold text-slate-900">{c.orders_count}</td>
-                        <td className="px-5 py-4 font-bold text-sky-600">{etb(c.total_spent)}</td>
-                        <td className="px-5 py-4 text-xs text-slate-400">{c.created_at}</td>
+                        <td className="px-5 py-4 font-semibold text-foreground">{c.orders_count}</td>
+                        <td className="px-5 py-4 font-bold text-primary">{etb(c.total_spent)}</td>
+                        <td className="px-5 py-4 text-xs text-muted-foreground/60">{c.created_at}</td>
                       </tr>
                     ))
                   )}
@@ -1555,19 +1586,19 @@ export function AdminDashboard() {
       {activeTab === "messages" && (
         <div className="space-y-6 animate-in fade-in-50 duration-200">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Inbound Messages</h1>
-            <p className="text-sm text-slate-500 mt-1">Direct inquiries, feedback, and questions from website visitors</p>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Inbound Messages</h1>
+            <p className="text-sm text-muted-foreground mt-1">Direct inquiries, feedback, and questions from website visitors</p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-xs space-y-3">
+            <div className="bg-card border border-border rounded-2xl p-5 shadow-xs space-y-3">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
                 <Input
                   placeholder="Search messages..."
                   value={messageSearch}
                   onChange={(e) => setMessageSearch(e.target.value)}
-                  className="pl-8 text-xs bg-slate-50 border-slate-200 h-8"
+                  className="pl-8 text-xs bg-muted/50 border-border h-8"
                 />
               </div>
 
@@ -1587,64 +1618,72 @@ export function AdminDashboard() {
                       }}
                       className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
                         isSelected
-                          ? "border-sky-500 bg-sky-50/70"
+                          ? "border-primary bg-primary/5"
                           : !m.read
-                            ? "border-sky-200 bg-sky-50/30 font-semibold"
-                            : "border-slate-100 hover:bg-slate-50"
+                            ? "border-primary/20 bg-primary/10/30 font-semibold"
+                            : "border-border hover:bg-muted/50"
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <p className="text-sm text-slate-900 truncate">{m.name}</p>
-                        {!m.read && <span className="h-2 w-2 rounded-full bg-sky-500" />}
+                        <p className="text-sm text-foreground truncate">{m.name}</p>
+                        {!m.read && <span className="h-2 w-2 rounded-full bg-primary" />}
                       </div>
-                      <p className="text-xs text-slate-600 truncate mt-0.5">{m.subject}</p>
-                      <p className="text-[11px] text-slate-400 mt-1">{m.date}</p>
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">{m.subject}</p>
+                      <p className="text-[11px] text-muted-foreground/60 mt-1">{m.date}</p>
                     </div>
                   );
                 })}
               </div>
             </div>
 
-            <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs lg:col-span-2">
+            <div className="bg-card border border-border rounded-2xl p-6 shadow-xs lg:col-span-2">
               {selectedMessage ? (
                 <div className="space-y-6">
-                  <div className="border-b border-slate-100 pb-4">
-                    <h2 className="text-lg font-bold text-slate-900">{selectedMessage.subject}</h2>
-                    <p className="text-xs text-slate-500 mt-1">
-                      From: <strong className="text-slate-800">{selectedMessage.name}</strong> ({selectedMessage.email}) · {selectedMessage.phone}
+                  <div className="border-b border-border pb-4">
+                    <h2 className="text-lg font-bold text-foreground">{selectedMessage.subject}</h2>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      From: <strong className="text-foreground">{selectedMessage.name}</strong> ({selectedMessage.email}) · {selectedMessage.phone}
                     </p>
                   </div>
 
-                  <div className="rounded-xl bg-slate-50 p-5 text-sm text-slate-800 leading-relaxed">
+                  <div className="rounded-xl bg-muted/50 p-5 text-sm text-foreground leading-relaxed">
                     {selectedMessage.message}
                   </div>
 
                   <div className="space-y-3 pt-2">
-                    <Label className="text-xs font-semibold text-slate-600">Quick Reply</Label>
+                    <Label className="text-xs font-semibold text-muted-foreground">Quick Reply</Label>
                     <textarea
                       rows={4}
                       value={replyText}
                       onChange={(e) => setReplyText(e.target.value)}
                       placeholder="Type your response to the customer..."
-                      className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:outline-sky-500"
+                      className="w-full rounded-xl border border-border p-3 text-sm focus:outline-sky-500"
                     />
                     <div className="flex justify-end gap-2">
                       <Button
                         size="sm"
-                        onClick={() => {
+                        onClick={async () => {
                           if (!replyText.trim()) {
                             toast.error("Please enter a reply message.");
                             return;
                           }
-                          toast.success(`Reply sent to ${selectedMessage.email}`);
+                          const msg = replyText.trim();
                           setReplyText("");
+                          await mutateReplyMessage({
+                            data: {
+                              quote_id: selectedMessage.id,
+                              email: selectedMessage.email,
+                              message: msg,
+                            },
+                          }).catch(() => {});
+                          toast.success(`Reply sent to ${selectedMessage.email}`);
                           setMessages((prev) =>
                             prev.map((item) =>
                               item.id === selectedMessage.id ? { ...item, replied: true } : item,
                             ),
                           );
                         }}
-                        className="bg-sky-600 hover:bg-sky-700 text-white gap-2"
+                        className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
                       >
                         <Send className="h-4 w-4" />
                         Send Reply
@@ -1672,12 +1711,12 @@ export function AdminDashboard() {
         <div className="space-y-6 animate-in fade-in-50 duration-200">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">Technical Support Queue</h1>
-              <p className="text-sm text-slate-500 mt-1">Engineering support, installation inquiries, and warranty tickets</p>
+              <h1 className="text-2xl font-bold tracking-tight text-foreground">Technical Support Queue</h1>
+              <p className="text-sm text-muted-foreground mt-1">Engineering support, installation inquiries, and warranty tickets</p>
             </div>
             <Button
               onClick={() => setNewTicketDialogOpen(true)}
-              className="bg-sky-600 hover:bg-sky-700 text-white gap-2"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
             >
               <Plus className="h-4 w-4" />
               New Ticket
@@ -1686,18 +1725,18 @@ export function AdminDashboard() {
 
           <div className="flex flex-col sm:flex-row items-center gap-3">
             <div className="relative flex-1 w-full sm:max-w-xs">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
               <Input
                 placeholder="Search ticket ID or client..."
                 value={ticketSearch}
                 onChange={(e) => setTicketSearch(e.target.value)}
-                className="pl-9 bg-white border-slate-200"
+                className="pl-9 bg-card border-border"
               />
             </div>
             <select
               value={ticketPriorityFilter}
               onChange={(e) => setTicketPriorityFilter(e.target.value)}
-              className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700"
+              className="h-10 rounded-lg border border-border bg-card px-3 text-sm font-medium text-muted-foreground"
             >
               <option value="all">All Priorities</option>
               <option value="Urgent">Urgent</option>
@@ -1707,10 +1746,10 @@ export function AdminDashboard() {
             </select>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
+          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
-                <thead className="border-b border-slate-100 bg-slate-50/70 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   <tr>
                     <th className="px-5 py-4">Ticket</th>
                     <th className="px-5 py-4">Customer</th>
@@ -1721,13 +1760,13 @@ export function AdminDashboard() {
                     <th className="px-5 py-4 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-border">
                   {filteredTickets.map((t) => (
-                    <tr key={t.id} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="px-5 py-4 font-bold text-sky-600">{t.id}</td>
-                      <td className="px-5 py-4 font-semibold text-slate-800">{t.customer}</td>
-                      <td className="px-5 py-4 text-slate-900">{t.subject}</td>
-                      <td className="px-5 py-4 text-xs text-slate-500">{t.category}</td>
+                    <tr key={t.id} className="hover:bg-muted/50/60 transition-colors">
+                      <td className="px-5 py-4 font-bold text-primary">{t.id}</td>
+                      <td className="px-5 py-4 font-semibold text-foreground">{t.customer}</td>
+                      <td className="px-5 py-4 text-foreground">{t.subject}</td>
+                      <td className="px-5 py-4 text-xs text-muted-foreground">{t.category}</td>
                       <td className="px-5 py-4">
                         <span
                           className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
@@ -1735,7 +1774,7 @@ export function AdminDashboard() {
                               ? "bg-rose-100 text-rose-700"
                               : t.priority === "High"
                                 ? "bg-amber-100 text-amber-700"
-                                : "bg-slate-100 text-slate-600"
+                                : "bg-muted text-muted-foreground"
                           }`}
                         >
                           {t.priority}
@@ -1747,7 +1786,7 @@ export function AdminDashboard() {
                             t.status === "Resolved"
                               ? "bg-emerald-100 text-emerald-800"
                               : t.status === "In Progress"
-                                ? "bg-sky-100 text-sky-800"
+                                ? "bg-primary/15 text-primary"
                                 : "bg-amber-100 text-amber-800"
                           }`}
                         >
@@ -1758,17 +1797,25 @@ export function AdminDashboard() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => {
+                          onClick={async () => {
+                            const newStatus = t.status === "Resolved" ? "In Progress" : "Resolved";
                             setTickets((prev) =>
                               prev.map((item) =>
                                 item.id === t.id
                                   ? {
                                       ...item,
-                                      status: item.status === "Resolved" ? "In Progress" : "Resolved",
+                                      status: newStatus,
                                     }
                                   : item,
                               ),
                             );
+                            await mutateReplyTicket({
+                              data: {
+                                ticket_id: t.id,
+                                customer_email: t.customer.includes("@") ? t.customer : undefined,
+                                reply: `Ticket status updated to ${newStatus}`,
+                              },
+                            }).catch(() => {});
                             toast.success(`Ticket ${t.id} updated`);
                           }}
                           className="text-xs"
@@ -1791,15 +1838,15 @@ export function AdminDashboard() {
       {activeTab === "reports" && (
         <div className="space-y-6 animate-in fade-in-50 duration-200">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Analytics & Sales Reports</h1>
-            <p className="text-sm text-slate-500 mt-1">Financial performance, daily volume, and catalog category revenue</p>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Analytics & Sales Reports</h1>
+            <p className="text-sm text-muted-foreground mt-1">Financial performance, daily volume, and catalog category revenue</p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Orders Timeline Chart */}
-            <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs lg:col-span-2">
-              <h3 className="text-base font-bold text-slate-900">30-Day Order Volume Trend</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Daily orders placed across Ethiopia</p>
+            <div className="bg-card border border-border rounded-2xl p-6 shadow-xs lg:col-span-2">
+              <h3 className="text-base font-bold text-foreground">30-Day Order Volume Trend</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Daily orders placed across Ethiopia</p>
               <div className="mt-6 h-64 w-full">
                 {overview?.timeline && overview.timeline.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
@@ -1811,7 +1858,7 @@ export function AdminDashboard() {
                     </LineChart>
                   </ResponsiveContainer>
                 ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-slate-400">
+                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground/60">
                     No order activity in the last 30 days.
                   </div>
                 )}
@@ -1819,9 +1866,9 @@ export function AdminDashboard() {
             </div>
 
             {/* Order Status Distribution */}
-            <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs">
-              <h3 className="text-base font-bold text-slate-900">Order Status Distribution</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Breakdown of orders</p>
+            <div className="bg-card border border-border rounded-2xl p-6 shadow-xs">
+              <h3 className="text-base font-bold text-foreground">Order Status Distribution</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Breakdown of orders</p>
               <div className="mt-6 h-64 w-full">
                 {overview?.statusDistribution && overview.statusDistribution.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
@@ -1844,7 +1891,7 @@ export function AdminDashboard() {
                     </PieChart>
                   </ResponsiveContainer>
                 ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-slate-400">
+                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground/60">
                     No order status data.
                   </div>
                 )}
@@ -1853,9 +1900,9 @@ export function AdminDashboard() {
           </div>
 
           {/* Revenue by category */}
-          <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs">
-            <h3 className="text-base font-bold text-slate-900">Revenue by Category (ETB)</h3>
-            <p className="text-xs text-slate-500 mt-0.5">Total sales generated per fiberglass product line</p>
+          <div className="bg-card border border-border rounded-2xl p-6 shadow-xs">
+            <h3 className="text-base font-bold text-foreground">Revenue by Category (ETB)</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Total sales generated per fiberglass product line</p>
             <div className="mt-6 h-64 w-full">
               {overview?.categoryRevenue && overview.categoryRevenue.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
@@ -1867,7 +1914,7 @@ export function AdminDashboard() {
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="flex h-full items-center justify-center text-xs text-slate-400">
+                <div className="flex h-full items-center justify-center text-xs text-muted-foreground/60">
                   No sales recorded by category yet.
                 </div>
               )}
@@ -1883,13 +1930,13 @@ export function AdminDashboard() {
         <div className="space-y-6 animate-in fade-in-50 duration-200">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">System Audit Logs</h1>
-              <p className="text-sm text-slate-500 mt-1">Security traceability, catalog changes, and administrative actions</p>
+              <h1 className="text-2xl font-bold tracking-tight text-foreground">System Audit Logs</h1>
+              <p className="text-sm text-muted-foreground mt-1">Security traceability, catalog changes, and administrative actions</p>
             </div>
             <select
               value={logCategoryFilter}
               onChange={(e) => setLogCategoryFilter(e.target.value)}
-              className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700"
+              className="h-10 rounded-lg border border-border bg-card px-3 text-sm font-medium text-muted-foreground"
             >
               <option value="all">All Event Categories</option>
               <option value="Orders">Orders</option>
@@ -1899,10 +1946,10 @@ export function AdminDashboard() {
             </select>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-xs">
+          <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
-                <thead className="border-b border-slate-100 bg-slate-50/70 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   <tr>
                     <th className="px-5 py-4">Timestamp</th>
                     <th className="px-5 py-4">Actor</th>
@@ -1911,18 +1958,18 @@ export function AdminDashboard() {
                     <th className="px-5 py-4">Event Details</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-border">
                   {filteredLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="px-5 py-4 font-mono text-xs text-slate-500">{log.timestamp}</td>
-                      <td className="px-5 py-4 font-semibold text-slate-800">{log.actor}</td>
+                    <tr key={log.id} className="hover:bg-muted/50/60 transition-colors">
+                      <td className="px-5 py-4 font-mono text-xs text-muted-foreground">{log.timestamp}</td>
+                      <td className="px-5 py-4 font-semibold text-foreground">{log.actor}</td>
                       <td className="px-5 py-4">
-                        <span className="font-mono text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md">
+                        <span className="font-mono text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-md">
                           {log.action}
                         </span>
                       </td>
-                      <td className="px-5 py-4 text-xs font-medium text-slate-600">{log.category}</td>
-                      <td className="px-5 py-4 text-slate-900">{log.details}</td>
+                      <td className="px-5 py-4 text-xs font-medium text-muted-foreground">{log.category}</td>
+                      <td className="px-5 py-4 text-foreground">{log.details}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1938,55 +1985,55 @@ export function AdminDashboard() {
       {activeTab === "settings" && (
         <div className="space-y-6 max-w-3xl animate-in fade-in-50 duration-200">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Admin & Business Settings</h1>
-            <p className="text-sm text-slate-500 mt-1">Configure company details, Ethiopian Birr localization, and alert rules</p>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Admin & Business Settings</h1>
+            <p className="text-sm text-muted-foreground mt-1">Configure company details, Ethiopian Birr localization, and alert rules</p>
           </div>
 
-          <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-xs space-y-6">
-            <h3 className="font-bold text-base text-slate-900 border-b border-slate-100 pb-3">
+          <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-6">
+            <h3 className="font-bold text-base text-foreground border-b border-border pb-3">
               Company & Factory Information
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-600">Company Name</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">Company Name</Label>
                 <Input
                   value={settingsData.companyName}
                   onChange={(e) => setSettingsData({ ...settingsData, companyName: e.target.value })}
-                  className="bg-slate-50/70"
+                  className="bg-muted/50"
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-600">Support Email</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">Support Email</Label>
                 <Input
                   value={settingsData.supportEmail}
                   onChange={(e) => setSettingsData({ ...settingsData, supportEmail: e.target.value })}
-                  className="bg-slate-50/70"
+                  className="bg-muted/50"
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-600">Contact Phone</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">Contact Phone</Label>
                 <Input
                   value={settingsData.phone}
                   onChange={(e) => setSettingsData({ ...settingsData, phone: e.target.value })}
-                  className="bg-slate-50/70"
+                  className="bg-muted/50"
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-600">Default Currency</Label>
-                <Input value={settingsData.currency} disabled className="bg-slate-100 text-slate-500" />
+                <Label className="text-xs font-semibold text-muted-foreground">Default Currency</Label>
+                <Input value={settingsData.currency} disabled className="bg-muted text-muted-foreground" />
               </div>
               <div className="sm:col-span-2 space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-600">Physical Address</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">Physical Address</Label>
                 <Input
                   value={settingsData.address}
                   onChange={(e) => setSettingsData({ ...settingsData, address: e.target.value })}
-                  className="bg-slate-50/70"
+                  className="bg-muted/50"
                 />
               </div>
             </div>
 
-            <h3 className="font-bold text-base text-slate-900 border-b border-slate-100 pb-3 pt-2">
+            <h3 className="font-bold text-base text-foreground border-b border-border pb-3 pt-2">
               Notifications & Inventory Alerts
             </h3>
 
@@ -1998,13 +2045,13 @@ export function AdminDashboard() {
                   onChange={(e) =>
                     setSettingsData({ ...settingsData, emailOrderNotify: e.target.checked })
                   }
-                  className="h-4 w-4 rounded text-sky-600 focus:ring-sky-500"
+                  className="h-4 w-4 rounded text-primary focus:ring-sky-500"
                 />
-                <span className="text-slate-700 font-medium">Send email notification when an order is submitted</span>
+                <span className="text-muted-foreground font-medium">Send email notification when an order is submitted</span>
               </label>
 
               <div className="flex items-center justify-between max-w-sm pt-2">
-                <span className="text-slate-700 font-medium">Low stock warning threshold:</span>
+                <span className="text-muted-foreground font-medium">Low stock warning threshold:</span>
                 <div className="flex items-center gap-2">
                   <Input
                     type="number"
@@ -2017,17 +2064,17 @@ export function AdminDashboard() {
                     }
                     className="w-20 text-center h-8"
                   />
-                  <span className="text-xs text-slate-500">units</span>
+                  <span className="text-xs text-muted-foreground">units</span>
                 </div>
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-100 flex justify-end">
+            <div className="pt-4 border-t border-border flex justify-end">
               <Button
                 onClick={() => {
                   toast.success("Settings saved successfully!");
                 }}
-                className="bg-sky-600 hover:bg-sky-700 text-white gap-2"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
               >
                 <Save className="h-4 w-4" />
                 Save Settings
@@ -2073,9 +2120,9 @@ export function AdminDashboard() {
 
       {/* New Support Ticket Dialog */}
       {newTicketDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
-            <h3 className="font-bold text-lg text-slate-900">Create Support Ticket</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-card p-6 shadow-2xl space-y-4">
+            <h3 className="font-bold text-lg text-foreground">Create Support Ticket</h3>
             <div className="space-y-3">
               <div>
                 <Label className="text-xs">Client Name</Label>
@@ -2103,7 +2150,7 @@ export function AdminDashboard() {
                       category: e.target.value as SupportTicket["category"],
                     })
                   }
-                  className="w-full h-10 rounded-lg border border-slate-200 px-3 text-sm"
+                  className="w-full h-10 rounded-lg border border-border px-3 text-sm"
                 >
                   <option value="Technical Specs">Technical Specs</option>
                   <option value="Installation">Installation</option>
@@ -2121,7 +2168,7 @@ export function AdminDashboard() {
                       priority: e.target.value as SupportTicket["priority"],
                     })
                   }
-                  className="w-full h-10 rounded-lg border border-slate-200 px-3 text-sm"
+                  className="w-full h-10 rounded-lg border border-border px-3 text-sm"
                 >
                   <option value="Normal">Normal</option>
                   <option value="High">High</option>
@@ -2159,7 +2206,7 @@ export function AdminDashboard() {
                     priority: "Normal",
                   });
                 }}
-                className="bg-sky-600 hover:bg-sky-700 text-white"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground"
               >
                 Create
               </Button>
