@@ -95,7 +95,7 @@ function Cart() {
                 const o = await placeOrder({ data: { address: address.trim(), items: cart } });
                 clearCart();
                 toast.success(`Order #${o.order_id} placed!`);
-                nav({ to: "/account" });
+                nav({ to: "/dashboard/orders" });
               } catch (err) {
                 toast.error(err instanceof Error ? err.message : "Could not place order.");
               } finally {

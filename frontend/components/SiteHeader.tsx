@@ -148,10 +148,10 @@ function UserMenu() {
               <ShieldCheck className="h-4 w-4" /> {isAdmin ? "Admin dashboard" : "Staff portal"}
             </Link>
           )}
-          <Link to="/account" role="menuitem" className={item} onClick={() => setOpen(false)}>
-            <LayoutDashboard className="h-4 w-4" /> My account
+          <Link to="/dashboard" role="menuitem" className={item} onClick={() => setOpen(false)}>
+            <LayoutDashboard className="h-4 w-4" /> My dashboard
           </Link>
-          <Link to="/account" role="menuitem" className={item} onClick={() => setOpen(false)}>
+          <Link to="/dashboard/orders" role="menuitem" className={item} onClick={() => setOpen(false)}>
             <Package className="h-4 w-4" /> My orders
           </Link>
           <button
@@ -215,7 +215,7 @@ export function SiteFooter() {
           <p className="font-semibold">Account</p>
           <ul className="mt-2 space-y-1.5">
             <li>
-              <Link to="/account">My account</Link>
+              <Link to="/dashboard">My account</Link>
             </li>
             <li>
               <Link to="/cart">Cart</Link>

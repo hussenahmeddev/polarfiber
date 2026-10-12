@@ -1328,13 +1328,16 @@ export function CustomerDashboard() {
                         <div>
                           {p.product_image ? (
                             <img
-                              src={p.has_db_image ? `/api/images/${p.product_id}` : (p.product_image || `https://placehold.co/800x600/e2e8f0/64748b?text=${encodeURIComponent(p.product_name)}`)}
-                              alt={p.product_name}
+                              src={
+                                p.product_image ||
+                                `https://placehold.co/800x600/e2e8f0/64748b?text=${encodeURIComponent(p.product_name || "Product")}`
+                              }
+                              alt={p.product_name || "Product"}
                               className="h-36 w-full rounded-xl object-cover mb-3"
                               onError={(e) => {
                                 const img = e.currentTarget;
                                 img.onerror = null;
-                                img.src = `https://placehold.co/800x600/e2e8f0/64748b?text=${encodeURIComponent(p.product_name)}`;
+                                img.src = `https://placehold.co/800x600/e2e8f0/64748b?text=${encodeURIComponent(p.product_name || "Product")}`;
                               }}
                             />
                           ) : (
