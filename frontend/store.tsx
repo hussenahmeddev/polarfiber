@@ -15,6 +15,8 @@ type Ctx = {
   // undefined = still loading, null = definitively logged out, User = authenticated
   user: User | null | undefined;
   products: Product[];
+  productsLoading: boolean;
+  productsError: boolean;
   cart: CartLine[];
   refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
@@ -86,6 +88,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // undefined while the query is in-flight, null when definitely not logged in
     user: loggedOut.current ? null : me.isPending ? undefined : ((me.data as User | null) ?? null),
     products: products.data ?? [],
+    productsLoading: products.isLoading,
+    productsError: products.isError,
     cart,
     refreshUser: async () => {
       await qc.invalidateQueries({ queryKey: ["me"] });

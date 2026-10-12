@@ -24,7 +24,7 @@ export const Route = createFileRoute("/products/")({
 });
 
 function Products() {
-  const { products } = useStore();
+  const { products, productsLoading, productsError } = useStore();
   const [q, setQ] = useState("");
   const [cat, setCat] = useState<string>("All");
   const [sort, setSort] = useState("default");
@@ -78,13 +78,41 @@ function Products() {
           <option value="name">Name A–Z</option>
         </select>
       </div>
-      <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-        {list.map((p) => (
-          <ProductCard key={p.product_id} p={p} />
-        ))}
-      </div>
-      {list.length === 0 && (
-        <p className="mt-10 text-muted-foreground">No products match your search.</p>
+
+      {productsError && (
+        <div className="mt-8 rounded-xl border border-rose-500/30 bg-rose-500/10 p-5 text-sm text-rose-700 dark:text-rose-300">
+          <p className="font-semibold">Unable to load products from database</p>
+          <p className="mt-1 text-xs text-rose-600/90 dark:text-rose-300/80">
+            Please make sure database environment variables (<code className="rounded bg-rose-500/20 px-1 py-0.5">MYSQL_HOST</code>, <code className="rounded bg-rose-500/20 px-1 py-0.5">MYSQL_PASSWORD</code>, <code className="rounded bg-rose-500/20 px-1 py-0.5">MYSQL_CA_CERT</code>, etc.) are configured in your Vercel Project Settings.
+          </p>
+        </div>
+      )}
+
+      {productsLoading ? (
+        <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="animate-pulse rounded-xl border bg-card p-4">
+              <div className="aspect-[4/3] rounded-lg bg-muted" />
+              <div className="mt-4 h-4 w-1/3 rounded bg-muted" />
+              <div className="mt-2 h-5 w-2/3 rounded bg-muted" />
+              <div className="mt-4 flex justify-between">
+                <div className="h-5 w-1/4 rounded bg-muted" />
+                <div className="h-4 w-1/4 rounded bg-muted" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+          <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {list.map((p) => (
+              <ProductCard key={p.product_id} p={p} />
+            ))}
+          </div>
+          {!productsError && list.length === 0 && (
+            <p className="mt-10 text-muted-foreground">No products match your search.</p>
+          )}
+        </>
       )}
     </div>
   );
