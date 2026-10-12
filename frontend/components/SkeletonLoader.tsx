@@ -1,12 +1,7 @@
 import { cn } from "@/frontend/utils";
 
 export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn("animate-pulse rounded-md bg-muted/70", className)}
-      {...props}
-    />
-  );
+  return <div className={cn("animate-pulse rounded-md bg-muted/70", className)} {...props} />;
 }
 
 export function StatCardSkeleton() {
@@ -37,10 +32,7 @@ export function TableSkeleton({ rows = 5, cols = 5 }: { rows?: number; cols?: nu
             {Array.from({ length: cols }).map((_, c) => (
               <Skeleton
                 key={c}
-                className={cn(
-                  "h-5",
-                  c === 0 ? "w-20" : c === cols - 1 ? "w-24 ml-auto" : "flex-1",
-                )}
+                className={cn("h-5", c === 0 ? "w-20" : c === cols - 1 ? "w-24 ml-auto" : "flex-1")}
               />
             ))}
           </div>

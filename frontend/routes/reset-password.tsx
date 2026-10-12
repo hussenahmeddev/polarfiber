@@ -144,9 +144,7 @@ function ResetPassword() {
       <section className="hidden rounded-2xl bg-primary p-10 text-primary-foreground lg:block">
         <img src="/images/logo.png" alt="" className="h-12 w-auto rounded bg-background p-1" />
         <h2 className="mt-8 text-3xl font-bold leading-tight">Set a new password</h2>
-        <p className="mt-3 opacity-90">
-          Choose a strong password of at least 6 characters.
-        </p>
+        <p className="mt-3 opacity-90">Choose a strong password of at least 6 characters.</p>
         <div className="mt-8 flex items-center gap-3 rounded-xl bg-primary-foreground/10 p-4 text-sm">
           <ShieldCheck className="h-5 w-5 shrink-0 opacity-80" />
           <span>Your reset link expires 30 minutes after it was sent.</span>

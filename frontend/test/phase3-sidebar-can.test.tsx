@@ -22,7 +22,7 @@ afterEach(() => {
 
 describe("Phase 3: Sidebar, Route Guard, and <Can> Component", () => {
   describe("Sidebar Nav Items Permission Filtering", () => {
-    it("staff role sees only permitted modules (Categories, Reports, Audit Logs hidden)", () => {
+    it("staff role sees permitted modules (Categories, Reports, Settings visible; Audit Logs hidden)", () => {
       const staffVisible = ADMIN_NAV_ITEMS.filter((item) => {
         if (!item.permission) return true;
         return hasPermission("staff", item.permission);
@@ -40,12 +40,12 @@ describe("Phase 3: Sidebar, Route Guard, and <Can> Component", () => {
       expect(ids).toContain("messages");
       expect(ids).toContain("support");
       expect(ids).toContain("settings");
+      expect(ids).toContain("categories");
+      expect(ids).toContain("reports");
 
       // Forbidden modules are strictly HIDDEN
-      expect(ids).not.toContain("categories");
-      expect(ids).not.toContain("reports");
       expect(ids).not.toContain("audit-logs");
-      expect(staffVisible.length).toBe(9);
+      expect(staffVisible.length).toBe(11);
     });
 
     it("admin role sees all 12 modules including Categories, Reports, Audit Logs", () => {

@@ -69,7 +69,8 @@ export async function logAction(
       if (req.user?.name) actorName = req.user.name;
       if (req.ip) ip = req.ip;
       else if (req.headers && typeof req.headers.get === "function") {
-        ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip");
+        ip =
+          req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip");
       }
     }
 

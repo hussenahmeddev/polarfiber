@@ -25,7 +25,11 @@ export const Route = createFileRoute("/about")({
 
 const values = [
   { icon: ShieldCheck, t: "Food-grade materials", d: "Hygienic storage safe for drinking water." },
-  { icon: Factory, t: "Local manufacturing", d: "Made at our factory in Jemoo Furi 2, Addis Ababa." },
+  {
+    icon: Factory,
+    t: "Local manufacturing",
+    d: "Made at our factory in Jemoo Furi 2, Addis Ababa.",
+  },
   { icon: Sparkles, t: "Customizable", d: "Sizes and options for homes, farms and industry." },
   { icon: Wrench, t: "After-sales support", d: "Installation help and a 10-year tanker warranty." },
 ];

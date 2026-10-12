@@ -39,9 +39,7 @@ describe("Phase 1: Migration & Staff Auth", () => {
         role: "staff",
         must_change_password: false,
       };
-      expect(() => assertAdmin(staffUser)).toThrowError(
-        expect.objectContaining({ status: 403 }),
-      );
+      expect(() => assertAdmin(staffUser)).toThrowError(expect.objectContaining({ status: 403 }));
     });
 
     it("rejects admin with must_change_password=true with 403", () => {
@@ -53,9 +51,7 @@ describe("Phase 1: Migration & Staff Auth", () => {
         role: "admin",
         must_change_password: true,
       };
-      expect(() => assertAdmin(tempAdmin)).toThrowError(
-        expect.objectContaining({ status: 403 }),
-      );
+      expect(() => assertAdmin(tempAdmin)).toThrowError(expect.objectContaining({ status: 403 }));
     });
   });
 

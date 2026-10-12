@@ -66,7 +66,7 @@ function jwtSecret(): string {
   if (secret.length < 32) {
     throw new Error(
       "JWT_SECRET / SESSION_SECRET must be at least 32 characters. " +
-      "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+        "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
     );
   }
   return secret;
@@ -79,9 +79,7 @@ function b64url(s: string): string {
 function signJwt(payload: object): string {
   const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const body = b64url(JSON.stringify(payload));
-  const sig = createHmac("sha256", jwtSecret())
-    .update(`${header}.${body}`)
-    .digest("base64url");
+  const sig = createHmac("sha256", jwtSecret()).update(`${header}.${body}`).digest("base64url");
   return `${header}.${body}.${sig}`;
 }
 
@@ -161,7 +159,9 @@ export function verifyAccessToken(): { uid: number } | null {
   }
 }
 
-export function parseUserIdFromCookieHeader(cookieHeader: string | null | undefined): number | null {
+export function parseUserIdFromCookieHeader(
+  cookieHeader: string | null | undefined,
+): number | null {
   if (!cookieHeader) return null;
   const cookies: Record<string, string> = {};
   for (const pair of cookieHeader.split(";")) {
@@ -273,9 +273,7 @@ export function assertRole(role: Role, ...roles: Role[]): void {
   }
 }
 
-export async function requireRole(
-  ...roles: Role[]
-): Promise<{ uid: number; role: Role }> {
+export async function requireRole(...roles: Role[]): Promise<{ uid: number; role: Role }> {
   const auth = await requireAuth();
   assertRole(auth.role, ...roles);
   return auth;
@@ -288,10 +286,9 @@ export async function requireUser(): Promise<SessionUser> {
   // changeTemporaryPassword. Every other protected function rejects them here.
   // The MustChangePasswordModal in the UI is UX sugar; this is the real gate.
   if (u.must_change_password) {
-    throw Object.assign(
-      new Error("You must change your temporary password before continuing."),
-      { status: 403 },
-    );
+    throw Object.assign(new Error("You must change your temporary password before continuing."), {
+      status: 403,
+    });
   }
   return u;
 }
@@ -340,10 +337,9 @@ export function assertPermission(user: SessionUser, permission: string): void {
     );
   }
   if (!hasPermission(user.role, permission)) {
-    throw Object.assign(
-      new Error(`Forbidden: missing permission '${permission}'`),
-      { status: 403 },
-    );
+    throw Object.assign(new Error(`Forbidden: missing permission '${permission}'`), {
+      status: 403,
+    });
   }
 }
 

@@ -19,30 +19,33 @@ export const STAFF_PERMISSIONS = [
   "support.reply",
   "support.update_status",
   "profile.update",
+  "categories.view",
+  "reports.view",
+  "settings.view",
 ] as const;
 
 export type StaffPermission = (typeof STAFF_PERMISSIONS)[number];
 
 export const FORBIDDEN_STAFF_PERMISSIONS = [
+  "products.create",
   "products.delete",
   "products.update_price",
-  "categories.view",
   "categories.create",
   "categories.update",
   "categories.delete",
+  "inventory.adjust_unlimited",
   "orders.mark_paid",
   "orders.cancel_after_dispatch",
   "customers.block",
   "customers.export",
-  "reports.view",
   "reports.export",
   "audit.view",
-  "settings.view",
   "settings.update",
   "team.view",
   "team.create",
   "team.update",
   "team.delete",
+  "revenue.view",
 ] as const;
 
 export const ALL_PERMISSIONS = [
@@ -64,12 +67,12 @@ export function hasPermission(role: Role | undefined | null, permission: string)
   if (role === "admin") return true;
 
   if (role === "staff") {
-    // Check wildcard prefixes forbidden for staff
+    // Check wildcard prefixes forbidden for staff (but allow .view for categories, reports, settings)
     if (
-      permission.startsWith("categories.") ||
-      permission.startsWith("reports.") ||
+      (permission.startsWith("categories.") && permission !== "categories.view") ||
+      (permission.startsWith("reports.") && permission !== "reports.view") ||
+      (permission.startsWith("settings.") && permission !== "settings.view") ||
       permission.startsWith("audit.") ||
-      permission.startsWith("settings.") ||
       permission.startsWith("team.")
     ) {
       return false;
@@ -77,12 +80,14 @@ export function hasPermission(role: Role | undefined | null, permission: string)
 
     // Prohibited specific actions
     if (
+      permission === "inventory.adjust_unlimited" ||
       permission === "products.delete" ||
       permission === "products.update_price" ||
       permission === "orders.mark_paid" ||
       permission === "orders.cancel_after_dispatch" ||
       permission === "customers.block" ||
-      permission === "customers.export"
+      permission === "customers.export" ||
+      permission === "revenue.view"
     ) {
       return false;
     }

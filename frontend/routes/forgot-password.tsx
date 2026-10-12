@@ -76,9 +76,7 @@ function ForgotPassword() {
       <section className="hidden rounded-2xl bg-primary p-10 text-primary-foreground lg:block">
         <img src="/images/logo.png" alt="" className="h-12 w-auto rounded bg-background p-1" />
         <h2 className="mt-8 text-3xl font-bold leading-tight">Reset your password</h2>
-        <p className="mt-3 opacity-90">
-          We'll send a secure reset link to your email address.
-        </p>
+        <p className="mt-3 opacity-90">We'll send a secure reset link to your email address.</p>
         <ul className="mt-8 space-y-4 text-sm">
           <li className="flex gap-3">
             <Droplets className="h-5 w-5 shrink-0" /> Food-grade water tankers
@@ -107,8 +105,8 @@ function ForgotPassword() {
               </div>
               <h2 className="text-lg font-bold text-foreground">Check your inbox</h2>
               <p className="text-sm text-muted-foreground">
-                If an account exists for that email, a reset link has been sent. It expires in
-                30 minutes.
+                If an account exists for that email, a reset link has been sent. It expires in 30
+                minutes.
               </p>
               <Button asChild variant="outline" className="w-full gap-2">
                 <Link to="/login">

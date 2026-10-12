@@ -74,10 +74,7 @@ function FAQItem({ question, answer }: { question: string; answer: string }) {
         aria-expanded={open}
       >
         <span>{question}</span>
-        <ChevronDown
-          aria-hidden="true"
-          className={cn("faq-chevron", open && "rotate-180")}
-        />
+        <ChevronDown aria-hidden="true" className={cn("faq-chevron", open && "rotate-180")} />
       </button>
       {open && <div className="faq-answer reference-body">{answer}</div>}
     </div>

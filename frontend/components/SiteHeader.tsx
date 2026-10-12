@@ -6,29 +6,29 @@ import { useStore } from "@/frontend/store";
 
 const nav = [
   { to: "/", label: "Home" },
-  { to: "/products", label: "Products" },
   { to: "/about", label: "About" },
+  { to: "/services", label: "Services" },
+  { to: "/products", label: "Our Product" },
   { to: "/faq", label: "FAQ" },
   { to: "/contact", label: "Contact" },
-  { to: "/quote", label: "Get a Quote" },
 ] as const;
 
 export function SiteHeader() {
   const { user, cart } = useStore();
   const count = cart.reduce((t, c) => t + c.quantity, 0);
-  const items = [
-    ...nav,
-  ];
+  const items = [...nav];
 
   return (
     <header className="reference-header sticky top-0 z-40 border-b">
       <div className="reference-header-inner">
-        <Link
-          to="/"
-          className="shrink-0"
-          aria-label="Polar Fiber home"
-        >
-          <img src="/images/logo.png" className="reference-logo" alt="Polar Fiber" width={112} height={48} />
+        <Link to="/" className="shrink-0" aria-label="Polar Fiber home">
+          <img
+            src="/images/logo.png"
+            className="reference-logo"
+            alt="Polar Fiber"
+            width={112}
+            height={48}
+          />
         </Link>
         <nav className="reference-nav" aria-label="Main navigation">
           {items.map((n) => (
@@ -44,7 +44,9 @@ export function SiteHeader() {
           ))}
         </nav>
         <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
-          <Button asChild className="reference-button hidden lg:inline-flex"><Link to="/contact">Contact</Link></Button>
+          <Button asChild className="reference-button hidden lg:inline-flex">
+            <Link to="/contact">Contact</Link>
+          </Button>
           <Link to="/cart" className="relative rounded-md p-2 hover:bg-muted" aria-label="Cart">
             <ShoppingCart className="h-5 w-5" />
             {count > 0 && (
@@ -65,10 +67,19 @@ export function SiteHeader() {
             </Link>
           )}
         </div>
-
       </div>
-      <nav aria-label="Mobile navigation" className="flex gap-1 overflow-x-auto border-t px-4 py-3 md:hidden">
-        {items.map((n) => (
+      <nav
+        aria-label="Mobile navigation"
+        className="flex gap-1 overflow-x-auto border-t px-4 py-3 md:hidden"
+      >
+        {[
+          { to: "/", label: "Home" },
+          { to: "/about", label: "About" },
+          { to: "/services", label: "Services" },
+          { to: "/products", label: "Our Product" },
+          { to: "/faq", label: "FAQ" },
+          { to: "/contact", label: "Contact" },
+        ].map((n) => (
           <Link
             key={n.to}
             to={n.to}
@@ -105,7 +116,8 @@ function UserMenu() {
   if (!user) return null;
   const isAdmin = user.role === "admin";
   const isStaff = user.role === "staff";
-  const item = "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-muted";
+  const item =
+    "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-muted";
   return (
     <div className="relative" ref={ref}>
       <button
@@ -121,7 +133,10 @@ function UserMenu() {
         <span className="hidden sm:inline">{user.name.split(" ")[0]}</span>
       </button>
       {open && (
-        <div role="menu" className="absolute right-0 z-50 mt-2 w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg">
+        <div
+          role="menu"
+          className="absolute right-0 z-50 mt-2 w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg"
+        >
           <div className="border-b px-3 py-2">
             <p className="truncate text-sm font-semibold">{user.name}</p>
             <p className="truncate text-xs text-muted-foreground">{user.email}</p>
@@ -160,7 +175,13 @@ export function SiteFooter() {
     <footer className="reference-footer border-t">
       <div className="mx-auto grid max-w-6xl gap-8 px-4 py-12 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <img src="/images/logo.png" alt="Polar Fiber" className="reference-logo" width={112} height={48} />
+          <img
+            src="/images/logo.png"
+            alt="Polar Fiber"
+            className="reference-logo"
+            width={112}
+            height={48}
+          />
           <p className="mt-2 text-sm opacity-75">
             Where Quality Meets Every Drop. Food-grade water tankers with a 10-year warranty.
           </p>
@@ -168,25 +189,46 @@ export function SiteFooter() {
         <nav aria-label="Footer" className="text-sm opacity-85">
           <p className="font-semibold">Explore</p>
           <ul className="mt-2 space-y-1.5">
-            <li><Link to="/products">Products</Link></li>
-            <li><Link to="/about">About</Link></li>
-            <li><Link to="/faq">FAQ</Link></li>
-            <li><Link to="/contact">Contact</Link></li>
-            <li><Link to="/quote">Request a quote</Link></li>
+            <li>
+              <Link to="/products">Our Product</Link>
+            </li>
+            <li>
+              <Link to="/services">Services</Link>
+            </li>
+            <li>
+              <Link to="/about">About</Link>
+            </li>
+            <li>
+              <Link to="/faq">FAQ</Link>
+            </li>
+            <li>
+              <Link to="/contact">Contact</Link>
+            </li>
+            <li>
+              <Link to="/quote">Request a quote</Link>
+            </li>
           </ul>
         </nav>
         <nav aria-label="Account" className="text-sm opacity-85">
           <p className="font-semibold">Account</p>
           <ul className="mt-2 space-y-1.5">
-            <li><Link to="/account">My account</Link></li>
-            <li><Link to="/cart">Cart</Link></li>
-            <li><Link to="/login">Sign in</Link></li>
+            <li>
+              <Link to="/account">My account</Link>
+            </li>
+            <li>
+              <Link to="/cart">Cart</Link>
+            </li>
+            <li>
+              <Link to="/login">Sign in</Link>
+            </li>
           </ul>
         </nav>
         <div className="text-sm opacity-85">
           <p className="font-semibold">Visit us</p>
           <p className="mt-2">Jemoo Furi 2, Addis Ababa, Ethiopia</p>
-          <a href="tel:+251911752298" className="mt-2 block">+251 911 75 22 98</a>
+          <a href="tel:+251911752298" className="mt-2 block">
+            +251 911 75 22 98
+          </a>
         </div>
       </div>
       <p className="border-t px-4 py-4 text-center text-xs opacity-70">

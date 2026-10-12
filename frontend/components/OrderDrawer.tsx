@@ -1,4 +1,7 @@
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
+import { getOrderStatusHistory } from "@/backend/api.functions";
 import {
   Dialog,
   DialogContent,
@@ -8,12 +11,7 @@ import {
 } from "@/frontend/components/ui/dialog";
 import { Button } from "@/frontend/components/ui/button";
 import { StatusBadge } from "@/frontend/components/StatusBadge";
-import {
-  ORDER_STATUSES,
-  etb,
-  type Order,
-  type OrderStatus,
-} from "@/shared/data";
+import { ORDER_STATUSES, etb, type Order, type OrderStatus } from "@/shared/data";
 import {
   CheckCircle2,
   Clock,
@@ -25,6 +23,7 @@ import {
   RotateCcw,
   User,
   FileText,
+  History,
 } from "lucide-react";
 import { cn } from "@/frontend/utils";
 import { Can } from "@/frontend/components/Can";
@@ -38,6 +37,8 @@ interface OrderDrawerProps {
   onStatusChange?: (orderId: number, status: OrderStatus) => void;
   statusUpdating?: boolean;
   onAddNote?: (orderId: number, note: string) => Promise<void>;
+  /** Restrict the status dropdown to a specific set (e.g. staff-valid transitions). */
+  allowedStatuses?: OrderStatus[];
 }
 
 const STEPS: { status: OrderStatus; label: string; icon: React.ElementType }[] = [
@@ -66,9 +67,17 @@ export function OrderDrawer({
   onStatusChange,
   statusUpdating = false,
   onAddNote,
+  allowedStatuses,
 }: OrderDrawerProps) {
   const [noteInput, setNoteInput] = React.useState("");
   const [noteSubmitting, setNoteSubmitting] = React.useState(false);
+
+  const fetchOrderHistory = useServerFn(getOrderStatusHistory);
+  const { data: statusHistory } = useQuery({
+    queryKey: ["order-status-history", order?.order_id],
+    queryFn: () => fetchOrderHistory({ data: { order_id: order!.order_id } }),
+    enabled: !!order?.order_id,
+  });
 
   if (!order) return null;
 
@@ -132,9 +141,7 @@ export function OrderDrawer({
                       <span
                         className={cn(
                           "mt-2 text-[11px] font-medium leading-tight",
-                          isCompleted
-                            ? "font-semibold text-foreground"
-                            : "text-muted-foreground",
+                          isCompleted ? "font-semibold text-foreground" : "text-muted-foreground",
                         )}
                       >
                         {step.label}
@@ -211,9 +218,7 @@ export function OrderDrawer({
 
           <div className="flex items-center justify-between rounded-xl bg-muted/60 p-4">
             <span className="font-semibold text-foreground">Grand Total:</span>
-            <span className="font-display text-xl font-bold text-primary">
-              {etb(order.total)}
-            </span>
+            <span className="font-display text-xl font-bold text-primary">{etb(order.total)}</span>
           </div>
 
           {/* Internal Notes (Admin & Staff Only) */}
@@ -274,15 +279,48 @@ export function OrderDrawer({
               )}
             </div>
           )}
+
+          {/* Order Status History (Admin & Staff Only) */}
+          {mode === "admin" && (
+            <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
+              <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <History className="h-3.5 w-3.5 text-primary" />
+                Status History
+              </span>
+              {(statusHistory ?? []).length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">
+                  No status history recorded yet.
+                </p>
+              ) : (
+                <div className="divide-y divide-border/50">
+                  {(statusHistory as any[]).map((entry, idx) => (
+                    <div key={entry.id} className="py-2 flex flex-col gap-1">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-foreground">{entry.status}</span>
+                          <span className="text-xs text-muted-foreground">{entry.created_at}</span>
+                        </div>
+                        <span className="text-xs text-muted-foreground">
+                          by {entry.changer_name ?? `User #${entry.changed_by}`}
+                        </span>
+                      </div>
+                      {entry.notes && (
+                        <p className="text-xs text-muted-foreground pl-6 ml-1 border-l border-border/50">
+                          {entry.notes}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer Actions */}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
           {mode === "customer" && onReorder && (
-            <Button
-              onClick={() => onReorder(order)}
-              className="w-full gap-2 sm:w-auto"
-            >
+            <Button onClick={() => onReorder(order)} className="w-full gap-2 sm:w-auto">
               <RotateCcw className="h-4 w-4" />
               Reorder Items
             </Button>
@@ -300,7 +338,7 @@ export function OrderDrawer({
                   onChange={(e) => onStatusChange(order.order_id, e.target.value as OrderStatus)}
                   className="h-9 rounded-md border border-input bg-background px-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring"
                 >
-                  {ORDER_STATUSES.map((st) => (
+                  {(allowedStatuses ?? ORDER_STATUSES).map((st) => (
                     <option key={st} value={st}>
                       {st}
                     </option>

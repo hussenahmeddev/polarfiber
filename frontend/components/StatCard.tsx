@@ -31,12 +31,9 @@ export function StatCard({
     default: "bg-card text-card-foreground border-border",
     primary:
       "bg-gradient-to-br from-primary/10 via-card to-card text-card-foreground border-primary/30",
-    accent:
-      "bg-water text-deep-foreground border-transparent shadow-soft",
-    warning:
-      "bg-amber-500/10 text-card-foreground border-amber-500/30",
-    success:
-      "bg-emerald-500/10 text-card-foreground border-emerald-500/30",
+    accent: "bg-water text-deep-foreground border-transparent shadow-soft",
+    warning: "bg-amber-500/10 text-card-foreground border-amber-500/30",
+    success: "bg-emerald-500/10 text-card-foreground border-emerald-500/30",
   };
 
   const iconStyles = {
@@ -100,11 +97,7 @@ export function StatCard({
               </span>
             )}
             {subtext && (
-              <span
-                className={
-                  variant === "accent" ? "text-white/70" : "text-muted-foreground"
-                }
-              >
+              <span className={variant === "accent" ? "text-white/70" : "text-muted-foreground"}>
                 {subtext}
               </span>
             )}

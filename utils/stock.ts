@@ -58,14 +58,7 @@ export async function changeStock(
     `INSERT INTO stock_movements
        (product_id, quantity, type, reference_type, reference_id, note)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    [
-      productId,
-      Math.abs(delta),
-      delta > 0 ? "in" : "out",
-      refType,
-      String(refId),
-      reason,
-    ],
+    [productId, Math.abs(delta), delta > 0 ? "in" : "out", refType, String(refId), reason],
   );
 
   return newStock;

@@ -77,7 +77,9 @@ export function DashboardLayout({
       <div className="sticky top-0 z-30 flex items-center justify-between border-b border-border bg-card/90 px-4 py-3 backdrop-blur-md lg:hidden">
         <Link to="/" className="flex items-center gap-2">
           <img src="/images/logo.png" alt="Polar Fiber" className="h-8 w-auto object-contain" />
-          <span className="font-display font-bold text-sm tracking-tight text-foreground">Polar Fiber</span>
+          <span className="font-display font-bold text-sm tracking-tight text-foreground">
+            Polar Fiber
+          </span>
         </Link>
         <div className="flex items-center gap-2">
           <Button asChild variant="ghost" size="sm" className="gap-1.5 text-xs">
@@ -91,7 +93,11 @@ export function DashboardLayout({
             className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-muted/50 text-muted-foreground"
             aria-label="Toggle theme"
           >
-            {isDark ? <Moon className="h-4 w-4 text-primary" /> : <Sun className="h-4 w-4 text-amber-500" />}
+            {isDark ? (
+              <Moon className="h-4 w-4 text-primary" />
+            ) : (
+              <Sun className="h-4 w-4 text-amber-500" />
+            )}
           </button>
         </div>
       </div>
@@ -104,9 +110,15 @@ export function DashboardLayout({
             {/* Brand Logo & Back to Store button */}
             <div className="space-y-3 border-b border-border pb-5">
               <Link to="/" className="flex items-center gap-3">
-                <img src="/images/logo.png" alt="Polar Fiber" className="h-10 w-auto object-contain" />
+                <img
+                  src="/images/logo.png"
+                  alt="Polar Fiber"
+                  className="h-10 w-auto object-contain"
+                />
                 <div>
-                  <p className="font-display font-bold text-base leading-none text-foreground">Polar Fiber</p>
+                  <p className="font-display font-bold text-base leading-none text-foreground">
+                    Polar Fiber
+                  </p>
                   <p className="mt-1 text-[11px] font-semibold text-primary uppercase tracking-wider">
                     {isAdmin ? "Admin Console" : "Customer Portal"}
                   </p>
@@ -214,7 +226,11 @@ export function DashboardLayout({
               className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground cursor-pointer"
             >
               <span className="flex items-center gap-2">
-                {isDark ? <Moon className="h-3.5 w-3.5 text-primary" /> : <Sun className="h-3.5 w-3.5 text-amber-500" />}
+                {isDark ? (
+                  <Moon className="h-3.5 w-3.5 text-primary" />
+                ) : (
+                  <Sun className="h-3.5 w-3.5 text-amber-500" />
+                )}
                 Theme: {isDark ? "Dark mode" : "Light mode"}
               </span>
               <span className="text-[11px] text-muted-foreground">Toggle</span>

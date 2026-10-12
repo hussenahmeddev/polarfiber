@@ -16,7 +16,7 @@ export default defineConfig({
         routesDirectory: "./frontend/routes",
         generatedRouteTree: "./frontend/routeTree.gen.ts",
       },
-      server: { 
+      server: {
         entry: "backend/server",
       },
       start: {

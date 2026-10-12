@@ -9,7 +9,10 @@ export const Route = createFileRoute("/dashboard")({
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { title: "Customer Dashboard — Polar Fiber" },
-      { name: "description", content: "Manage your Polar Fiber orders, quote requests, and account settings." },
+      {
+        name: "description",
+        content: "Manage your Polar Fiber orders, quote requests, and account settings.",
+      },
       { property: "og:title", content: "Customer Dashboard — Polar Fiber" },
       { property: "og:description", content: "Track your orders, quotes, and profile." },
     ],

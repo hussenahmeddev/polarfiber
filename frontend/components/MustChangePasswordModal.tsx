@@ -15,10 +15,7 @@ interface MustChangePasswordModalProps {
   onComplete: () => Promise<void> | void;
 }
 
-export function MustChangePasswordModal({
-  user,
-  onComplete,
-}: MustChangePasswordModalProps) {
+export function MustChangePasswordModal({ user, onComplete }: MustChangePasswordModalProps) {
   const { logout } = useStore();
   const mutateChangeTemp = useServerFn(changeTemporaryPassword);
 
@@ -84,8 +81,8 @@ export function MustChangePasswordModal({
             Update Temporary Password
           </h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
-            Welcome, <span className="font-semibold text-foreground">{user.name}</span>!
-            As a new staff member, you must choose a secure permanent password before accessing the system.
+            Welcome, <span className="font-semibold text-foreground">{user.name}</span>! As a new
+            staff member, you must choose a secure permanent password before accessing the system.
           </p>
         </div>
 

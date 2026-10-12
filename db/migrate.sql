@@ -196,3 +196,33 @@ ALTER TABLE audit_logs
 -- =============================================================================
 -- END OF MIGRATION
 -- =============================================================================
+
+-- =============================================================================
+-- 14. categories  – parent_id, sort_order  (admin spec)
+-- =============================================================================
+ALTER TABLE categories
+  ADD COLUMN IF NOT EXISTS parent_id  INT      NULL           AFTER category_id,
+  ADD COLUMN IF NOT EXISTS sort_order SMALLINT NOT NULL DEFAULT 0 AFTER description;
+
+ALTER TABLE categories
+  ADD CONSTRAINT IF NOT EXISTS fk_cat_parent
+    FOREIGN KEY (parent_id) REFERENCES categories(category_id) ON DELETE SET NULL;
+
+-- =============================================================================
+-- 15. quote_requests  – delivery_location
+-- =============================================================================
+ALTER TABLE quote_requests
+  ADD COLUMN IF NOT EXISTS delivery_location VARCHAR(255) NULL AFTER message;
+
+-- =============================================================================
+-- 16. app_settings  – SMTP + business settings seed rows
+-- =============================================================================
+INSERT IGNORE INTO app_settings (setting_key, setting_value, description) VALUES
+  ('vat_rate',           '0',   'VAT percentage applied to orders (e.g. 15 for 15%)'),
+  ('delivery_fee',       '0',   'Flat delivery fee in ETB'),
+  ('low_stock_threshold','5',   'Products at or below this stock level are flagged as low stock'),
+  ('smtp_host',          '',    'SMTP server hostname'),
+  ('smtp_port',          '587', 'SMTP server port'),
+  ('smtp_user',          '',    'SMTP authentication username'),
+  ('smtp_password_enc',  '',    'AES-256-GCM encrypted SMTP password (base64)'),
+  ('smtp_from',          '',    'Sender address for outgoing email');

@@ -28,14 +28,18 @@ function Contact() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-12">
       <h1 className="text-4xl font-bold">Contact us</h1>
-      <p className="mt-3 text-muted-foreground">Questions about sizes, delivery or installation? We're here to help.</p>
+      <p className="mt-3 text-muted-foreground">
+        Questions about sizes, delivery or installation? We're here to help.
+      </p>
       <div className="mt-8 grid gap-6 md:grid-cols-3">
         {items.map((i) => (
           <div key={i.t} className="rounded-xl border bg-card p-6">
             <i.icon className="h-6 w-6 text-primary" />
             <p className="mt-3 text-sm font-semibold text-muted-foreground">{i.t}</p>
             {i.href ? (
-              <a href={i.href} className="mt-1 block font-bold hover:text-primary">{i.v}</a>
+              <a href={i.href} className="mt-1 block font-bold hover:text-primary">
+                {i.v}
+              </a>
             ) : (
               <p className="mt-1 font-bold">{i.v}</p>
             )}

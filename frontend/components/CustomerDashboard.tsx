@@ -43,12 +43,7 @@ import { Label } from "@/frontend/components/ui/label";
 import { StatusBadge } from "@/frontend/components/StatusBadge";
 import { OrderDrawer } from "@/frontend/components/OrderDrawer";
 import { EmptyState } from "@/frontend/components/EmptyState";
-import {
-  etb,
-  type Order,
-  type Quote,
-  type Product,
-} from "@/shared/data";
+import { etb, type Order, type Quote, type Product } from "@/shared/data";
 import { useStore, productsKey } from "@/frontend/store";
 import {
   getMyDashboard,
@@ -58,68 +53,45 @@ import {
   updateMyProfile,
   changeMyPassword,
   getMyNotifications,
+  getCustomerConversations,
+  getCustomerConversationMessages,
+  createCustomerConversation,
+  replyToCustomerConversation,
+  getCustomerAddresses,
+  createCustomerAddress,
+  updateCustomerAddress,
+  deleteCustomerAddress,
+  setDefaultCustomerAddress,
+  getCustomerFavorites,
+  toggleCustomerFavorite,
+  removeCustomerFavorite,
 } from "@/backend/api.functions";
 import { cn } from "@/frontend/utils";
 
-// Customer Message Thread Types
-interface CustomerMessageItem {
-  id: string;
-  sender: "customer" | "admin";
-  senderName: string;
-  text: string;
-  timestamp: string;
-}
-
+// Customer Message Thread Types (from server)
 interface CustomerConversation {
-  id: string;
+  conversation_id: number;
+  user_id: number;
   subject: string;
   topic: string;
   status: "Awaiting Reply" | "Admin Replied" | "Resolved";
+  created_at: string;
   updated_at: string;
-  messages: CustomerMessageItem[];
+  last_message_text?: string | null;
+  last_message_at?: string | null;
+  unread_count?: number;
 }
 
-const INITIAL_CUSTOMER_CONVERSATIONS: CustomerConversation[] = [
-  {
-    id: "CONV-101",
-    subject: "Inquiry regarding 15,000L vertical water tanker installation",
-    topic: "Custom Engineering",
-    status: "Admin Replied",
-    updated_at: "Today, 10:30 AM",
-    messages: [
-      {
-        id: "m-1",
-        sender: "customer",
-        senderName: "You",
-        text: "Hello Polar Fiber team, we need technical advice on the concrete foundation specifications required before installing the 15,000L vertical fiberglass tanker.",
-        timestamp: "Yesterday, 3:15 PM",
-      },
-      {
-        id: "m-2",
-        sender: "admin",
-        senderName: "Polar Fiber Engineering (Tadesse M.)",
-        text: "Hello! For a 15,000L vertical tank, we recommend a reinforced concrete pad at least 150mm thick with C25 concrete strength, completely level and free of sharp aggregate. We have attached the foundation blueprint to your customer records.",
-        timestamp: "Today, 10:30 AM",
-      },
-    ],
-  },
-  {
-    id: "CONV-102",
-    subject: "Delivery timeline for ribbed roof sheets order",
-    topic: "Order Status Inquiry",
-    status: "Awaiting Reply",
-    updated_at: "Yesterday",
-    messages: [
-      {
-        id: "m-3",
-        sender: "customer",
-        senderName: "You",
-        text: "Could you confirm the estimated delivery date to our construction site in Bole?",
-        timestamp: "Yesterday, 5:45 PM",
-      },
-    ],
-  },
-];
+interface CustomerMessage {
+  message_id: number;
+  conversation_id: number;
+  sender_type: "customer" | "admin";
+  sender_id: number;
+  sender_name: string;
+  text: string;
+  is_read: number;
+  created_at: string;
+}
 
 // Seed Customer Notifications
 interface CustomerNotification {
@@ -135,7 +107,8 @@ const INITIAL_NOTIFICATIONS: CustomerNotification[] = [
   {
     id: "notif-1",
     title: "Order Received",
-    message: "Thank you for choosing Polar Fiber. Your order has been registered and is being reviewed by engineering.",
+    message:
+      "Thank you for choosing Polar Fiber. Your order has been registered and is being reviewed by engineering.",
     date: "Just now",
     read: false,
     type: "order",
@@ -143,45 +116,11 @@ const INITIAL_NOTIFICATIONS: CustomerNotification[] = [
   {
     id: "notif-2",
     title: "Catalog Updated",
-    message: "New heavy-duty corrugated fiberglass roof sheets and vertical water tankers are now available in catalog.",
+    message:
+      "New heavy-duty corrugated fiberglass roof sheets and vertical water tankers are now available in catalog.",
     date: "1 day ago",
     read: true,
     type: "system",
-  },
-];
-
-// Seed Customer Addresses
-interface CustomerAddress {
-  id: string;
-  label: string;
-  recipient: string;
-  phone: string;
-  city: string;
-  subcity: string;
-  details: string;
-  isDefault: boolean;
-}
-
-const INITIAL_ADDRESSES: CustomerAddress[] = [
-  {
-    id: "addr-1",
-    label: "Factory / Construction Site",
-    recipient: "Abdu Ahmed",
-    phone: "+251 911 234 567",
-    city: "Addis Ababa",
-    subcity: "Bole Sub-City, Woreda 03",
-    details: "Near Bole Medhanealem, Commercial Building Project Site",
-    isDefault: true,
-  },
-  {
-    id: "addr-2",
-    label: "Main Office / Warehouse",
-    recipient: "Abdu Ahmed",
-    phone: "+251 911 234 567",
-    city: "Addis Ababa",
-    subcity: "Kirkos Sub-City",
-    details: "Mexico Square, Kirkos Commercial Center, 4th Floor",
-    isDefault: false,
   },
 ];
 
@@ -204,8 +143,8 @@ export function CustomerDashboard() {
   const [selectedQuote, setSelectedQuote] = React.useState<Quote | null>(null);
 
   // Messages State
-  const [conversations, setConversations] = React.useState<CustomerConversation[]>(INITIAL_CUSTOMER_CONVERSATIONS);
-  const [selectedConversation, setSelectedConversation] = React.useState<CustomerConversation | null>(INITIAL_CUSTOMER_CONVERSATIONS[0] ?? null);
+  const [selectedConversation, setSelectedConversation] = React.useState<CustomerConversation | null>(null);
+  const [conversationMessages, setConversationMessages] = React.useState<CustomerMessage[]>([]);
   const [messageSearch, setMessageSearch] = React.useState("");
   const [replyInput, setReplyInput] = React.useState("");
   const [newMessageDialogOpen, setNewMessageDialogOpen] = React.useState(false);
@@ -214,22 +153,26 @@ export function CustomerDashboard() {
     topic: "General Inquiry",
     text: "",
   });
+  const [loadingMessages, setLoadingMessages] = React.useState(false);
 
   // Notifications State
-  const [notifications, setNotifications] = React.useState<CustomerNotification[]>(INITIAL_NOTIFICATIONS);
+  const [notifications, setNotifications] =
+    React.useState<CustomerNotification[]>(INITIAL_NOTIFICATIONS);
 
   // Addresses State
-  const [addresses, setAddresses] = React.useState<CustomerAddress[]>(INITIAL_ADDRESSES);
   const [newAddressDialogOpen, setNewAddressDialogOpen] = React.useState(false);
   const [newAddressForm, setNewAddressForm] = React.useState({
     label: "New Address",
     recipient: user?.name ?? "",
     phone: user?.phone ?? "",
     city: "Addis Ababa",
-    subcity: "",
-    details: "",
-    isDefault: false,
+    region: "",
+    line1: "",
+    line2: "",
+    country: "Ethiopia",
+    is_default: false,
   });
+  const [editingAddressId, setEditingAddressId] = React.useState<number | null>(null);
 
   // Profile Form State
   const [profileName, setProfileName] = React.useState(user?.name ?? "");
@@ -250,6 +193,18 @@ export function CustomerDashboard() {
   const mutateProfile = useServerFn(updateMyProfile);
   const mutatePassword = useServerFn(changeMyPassword);
   const fetchNotifications = useServerFn(getMyNotifications);
+  const fetchConversations = useServerFn(getCustomerConversations);
+  const fetchConversationMessages = useServerFn(getCustomerConversationMessages);
+  const mutateCreateConversation = useServerFn(createCustomerConversation);
+  const mutateReplyConversation = useServerFn(replyToCustomerConversation);
+  const fetchAddresses = useServerFn(getCustomerAddresses);
+  const mutateCreateAddress = useServerFn(createCustomerAddress);
+  const mutateUpdateAddress = useServerFn(updateCustomerAddress);
+  const mutateDeleteAddress = useServerFn(deleteCustomerAddress);
+  const mutateSetDefaultAddress = useServerFn(setDefaultCustomerAddress);
+  const fetchFavorites = useServerFn(getCustomerFavorites);
+  const mutateToggleFavorite = useServerFn(toggleCustomerFavorite);
+  const mutateRemoveFavorite = useServerFn(removeCustomerFavorite);
 
   // Queries
   const dashboardQuery = useQuery({
@@ -281,6 +236,24 @@ export function CustomerDashboard() {
     queryFn: () => fetchProducts(),
   });
 
+  const conversationsQuery = useQuery({
+    queryKey: ["customer", "conversations", user?.user_id],
+    queryFn: () => fetchConversations(),
+    enabled: !!user,
+  });
+
+  const addressesQuery = useQuery({
+    queryKey: ["customer", "addresses", user?.user_id],
+    queryFn: () => fetchAddresses(),
+    enabled: !!user,
+  });
+
+  const favoritesQuery = useQuery({
+    queryKey: ["customer", "favorites", user?.user_id],
+    queryFn: () => fetchFavorites(),
+    enabled: !!user,
+  });
+
   React.useEffect(() => {
     if (user) {
       setProfileName(user.name);
@@ -304,7 +277,10 @@ export function CustomerDashboard() {
         <p className="mt-2 text-sm text-muted-foreground">
           Sign in to access your customer dashboard, track orders, and view quote inquiries.
         </p>
-        <Button asChild className="mt-6 w-full bg-primary hover:bg-primary/90 text-primary-foreground">
+        <Button
+          asChild
+          className="mt-6 w-full bg-primary hover:bg-primary/90 text-primary-foreground"
+        >
           <Link to="/login">Sign In to Polar Fiber</Link>
         </Button>
       </div>
@@ -344,14 +320,11 @@ export function CustomerDashboard() {
   const unreadNotificationsCount = displayNotifications.filter((n) => !n.read).length;
 
   // Unread customer messages / replies from admin
-  const unreadRepliesCount = conversations.filter((c) => c.status === "Admin Replied").length;
+  const unreadRepliesCount = (conversationsQuery.data ?? []).filter((c) => c.status === "Admin Replied").length;
 
   // Recent orders & quotes
   const recentOrders = allOrders.slice(0, 5);
   const recentQuotes = allQuotes.slice(0, 5);
-
-  // Favorites (using first 4 products as featured favorites)
-  const favoriteProducts = allProducts.slice(0, 4);
 
   // Handlers
   const handleReorder = (order: Order) => {
@@ -413,86 +386,140 @@ export function CustomerDashboard() {
     }
   };
 
-  const handleAddAddress = (e: React.FormEvent) => {
+  const handleAddAddress = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAddressForm.details || !newAddressForm.subcity) {
-      toast.error("Please fill in subcity and address details.");
+    if (!newAddressForm.line1 || !newAddressForm.region) {
+      toast.error("Please fill in region and address details.");
       return;
     }
-    const newAddr: CustomerAddress = {
-      id: `addr-${Date.now()}`,
-      label: newAddressForm.label || "Delivery Location",
-      recipient: newAddressForm.recipient || user.name,
-      phone: newAddressForm.phone || user.phone,
-      city: newAddressForm.city || "Addis Ababa",
-      subcity: newAddressForm.subcity,
-      details: newAddressForm.details,
-      isDefault: newAddressForm.isDefault || addresses.length === 0,
-    };
-    if (newAddr.isDefault) {
-      setAddresses(addresses.map((a) => ({ ...a, isDefault: false })).concat(newAddr));
-    } else {
-      setAddresses([...addresses, newAddr]);
+    try {
+      await mutateCreateAddress({ data: newAddressForm });
+      addressesQuery.refetch();
+      toast.success("Address added successfully!");
+      setNewAddressDialogOpen(false);
+      setNewAddressForm({
+        label: "New Address",
+        recipient: user?.name ?? "",
+        phone: user?.phone ?? "",
+        city: "Addis Ababa",
+        region: "",
+        line1: "",
+        line2: "",
+        country: "Ethiopia",
+        is_default: false,
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to add address");
     }
-    toast.success("Address added successfully!");
-    setNewAddressDialogOpen(false);
   };
 
-  const handleSendReply = () => {
+  const handleEditAddress = (address: any) => {
+    setEditingAddressId(address.address_id);
+    setNewAddressForm({
+      label: address.label,
+      recipient: address.recipient,
+      phone: address.phone,
+      city: address.city,
+      region: address.region ?? "",
+      line1: address.line1,
+      line2: address.line2 ?? "",
+      country: address.country,
+      is_default: Boolean(address.is_default),
+    });
+    setNewAddressDialogOpen(true);
+  };
+
+  const handleUpdateAddress = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAddressId) return;
+    if (!newAddressForm.line1 || !newAddressForm.region) {
+      toast.error("Please fill in region and address details.");
+      return;
+    }
+    try {
+      await mutateUpdateAddress({ data: { address_id: editingAddressId, ...newAddressForm } });
+      addressesQuery.refetch();
+      toast.success("Address updated successfully!");
+      setNewAddressDialogOpen(false);
+      setEditingAddressId(null);
+      setNewAddressForm({
+        label: "New Address",
+        recipient: user?.name ?? "",
+        phone: user?.phone ?? "",
+        city: "Addis Ababa",
+        region: "",
+        line1: "",
+        line2: "",
+        country: "Ethiopia",
+        is_default: false,
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update address");
+    }
+  };
+
+  const handleDeleteAddress = async (addressId: number) => {
+    if (!confirm("Are you sure you want to delete this address?")) return;
+    try {
+      await mutateDeleteAddress({ data: { address_id: addressId } });
+      addressesQuery.refetch();
+      toast.success("Address deleted successfully!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete address");
+    }
+  };
+
+  const handleSetDefaultAddress = async (addressId: number) => {
+    try {
+      await mutateSetDefaultAddress({ data: { address_id: addressId } });
+      addressesQuery.refetch();
+      toast.success("Default address updated!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set default address");
+    }
+  };
+
+  const handleSendReply = async () => {
     if (!replyInput.trim() || !selectedConversation) return;
 
-    const newMsg: CustomerMessageItem = {
-      id: `m-${Date.now()}`,
-      sender: "customer",
-      senderName: "You",
-      text: replyInput.trim(),
-      timestamp: "Just now",
-    };
-
-    const updatedConv: CustomerConversation = {
-      ...selectedConversation,
-      status: "Awaiting Reply",
-      updated_at: "Just now",
-      messages: [...selectedConversation.messages, newMsg],
-    };
-
-    setConversations((prev) =>
-      prev.map((c) => (c.id === selectedConversation.id ? updatedConv : c)),
-    );
-    setSelectedConversation(updatedConv);
-    setReplyInput("");
-    toast.success("Message sent to Polar Fiber engineering team.");
+    setLoadingMessages(true);
+    try {
+      await mutateReplyConversation({
+        data: { conversation_id: selectedConversation.conversation_id, text: replyInput.trim() },
+      });
+      // Refetch messages
+      const messages = await fetchConversationMessages({ data: { conversation_id: selectedConversation.conversation_id } });
+      setConversationMessages(messages);
+      // Refetch conversations to update status
+      conversationsQuery.refetch();
+      setReplyInput("");
+      toast.success("Message sent!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to send message");
+    } finally {
+      setLoadingMessages(false);
+    }
   };
 
-  const handleCreateNewConversation = (e: React.FormEvent) => {
+  const handleCreateNewConversation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessageForm.subject.trim() || !newMessageForm.text.trim()) {
       toast.error("Please fill in subject and message.");
       return;
     }
 
-    const newConv: CustomerConversation = {
-      id: `CONV-${Math.floor(100 + Math.random() * 900)}`,
-      subject: newMessageForm.subject.trim(),
-      topic: newMessageForm.topic,
-      status: "Awaiting Reply",
-      updated_at: "Just now",
-      messages: [
-        {
-          id: `m-${Date.now()}`,
-          sender: "customer",
-          senderName: "You",
-          text: newMessageForm.text.trim(),
-          timestamp: "Just now",
-        },
-      ],
-    };
-
-    setConversations([newConv, ...conversations]);
-    setSelectedConversation(newConv);
-    setNewMessageDialogOpen(false);
-    setNewMessageForm({ subject: "", topic: "General Inquiry", text: "" });
-    toast.success("New message sent successfully!");
+    try {
+      const result = await mutateCreateConversation({ data: newMessageForm });
+      if (result.conversation_id) {
+        // Refetch conversations
+        conversationsQuery.refetch();
+        setNewMessageDialogOpen(false);
+        setNewMessageForm({ subject: "", topic: "General Inquiry", text: "" });
+        toast.success("New message sent successfully!");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create conversation");
+    }
   };
 
   // Filtered orders
@@ -506,11 +533,11 @@ export function CustomerDashboard() {
   });
 
   // Filtered conversations
-  const filteredConversations = conversations.filter((c) => {
+  const filteredConversations = (conversationsQuery.data ?? []).filter((c) => {
     return (
       c.subject.toLowerCase().includes(messageSearch.toLowerCase()) ||
       c.topic.toLowerCase().includes(messageSearch.toLowerCase()) ||
-      c.messages.some((m) => m.text.toLowerCase().includes(messageSearch.toLowerCase()))
+      (c.last_message_text?.toLowerCase().includes(messageSearch.toLowerCase()) ?? false)
     );
   });
 
@@ -519,11 +546,21 @@ export function CustomerDashboard() {
     { id: "overview", label: "Overview", icon: LayoutDashboard },
     { id: "orders", label: "My Orders", icon: Package, badge: allOrders.length || undefined },
     { id: "quotes", label: "My Quotes", icon: FileText, badge: allQuotes.length || undefined },
-    { id: "messages", label: "Messages", icon: MessageSquare, badge: unreadRepliesCount || undefined },
+    {
+      id: "messages",
+      label: "Messages",
+      icon: MessageSquare,
+      badge: unreadRepliesCount || undefined,
+    },
     { id: "favorites", label: "Favorites", icon: Heart },
     { id: "profile", label: "Profile", icon: UserIcon },
     { id: "addresses", label: "Addresses", icon: MapPin },
-    { id: "notifications", label: "Notifications", icon: Bell, badge: unreadNotificationsCount || undefined },
+    {
+      id: "notifications",
+      label: "Notifications",
+      icon: Bell,
+      badge: unreadNotificationsCount || undefined,
+    },
     { id: "support", label: "Support", icon: Globe },
   ];
 
@@ -600,7 +637,9 @@ export function CustomerDashboard() {
                       <Icon
                         className={cn(
                           "h-4 w-4 shrink-0 transition-transform group-hover:scale-105",
-                          isActive ? "text-sidebar-accent-foreground" : "text-sidebar-foreground/40 group-hover:text-sidebar-accent-foreground",
+                          isActive
+                            ? "text-sidebar-accent-foreground"
+                            : "text-sidebar-foreground/40 group-hover:text-sidebar-accent-foreground",
                         )}
                       />
                       <span>{item.label}</span>
@@ -609,7 +648,9 @@ export function CustomerDashboard() {
                       <span
                         className={cn(
                           "rounded-full px-2 py-0.5 text-[11px] font-bold",
-                          isActive ? "bg-sidebar-accent/60 text-sidebar-accent-foreground" : "bg-sidebar-border text-sidebar-foreground/70",
+                          isActive
+                            ? "bg-sidebar-accent/60 text-sidebar-accent-foreground"
+                            : "bg-sidebar-border text-sidebar-foreground/70",
                         )}
                       >
                         {item.badge}
@@ -659,7 +700,9 @@ export function CustomerDashboard() {
                   >
                     <div>
                       <p className="text-xs font-semibold text-muted-foreground">Active Orders</p>
-                      <p className="text-3xl font-bold text-foreground mt-1.5">{activeOrdersCount}</p>
+                      <p className="text-3xl font-bold text-foreground mt-1.5">
+                        {activeOrdersCount}
+                      </p>
                     </div>
                     <div className="h-13 w-13 rounded-2xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
                       <Package className="h-6 w-6 stroke-[2]" />
@@ -673,7 +716,9 @@ export function CustomerDashboard() {
                   >
                     <div>
                       <p className="text-xs font-semibold text-muted-foreground">Pending Quotes</p>
-                      <p className="text-3xl font-bold text-foreground mt-1.5">{pendingQuotesCount}</p>
+                      <p className="text-3xl font-bold text-foreground mt-1.5">
+                        {pendingQuotesCount}
+                      </p>
                     </div>
                     <div className="h-13 w-13 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-500 group-hover:scale-105 transition-transform">
                       <FileText className="h-6 w-6 stroke-[2]" />
@@ -689,8 +734,12 @@ export function CustomerDashboard() {
                     className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
                   >
                     <div>
-                      <p className="text-xs font-semibold text-muted-foreground">Completed Orders</p>
-                      <p className="text-3xl font-bold text-foreground mt-1.5">{completedOrdersCount}</p>
+                      <p className="text-xs font-semibold text-muted-foreground">
+                        Completed Orders
+                      </p>
+                      <p className="text-3xl font-bold text-foreground mt-1.5">
+                        {completedOrdersCount}
+                      </p>
                     </div>
                     <div className="h-13 w-13 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-500 group-hover:scale-105 transition-transform">
                       <CheckCircle2 className="h-6 w-6 stroke-[2]" />
@@ -703,7 +752,9 @@ export function CustomerDashboard() {
                     className="group bg-card border border-border rounded-2xl p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-border cursor-pointer"
                   >
                     <div>
-                      <p className="text-xs font-semibold text-muted-foreground">Unread Notifications</p>
+                      <p className="text-xs font-semibold text-muted-foreground">
+                        Unread Notifications
+                      </p>
                       <p className="text-3xl font-bold text-foreground mt-1.5">
                         {unreadNotificationsCount}
                       </p>
@@ -771,11 +822,16 @@ export function CustomerDashboard() {
                                 <StatusBadge s={ord.status} />
                               </div>
                               <p className="text-xs text-muted-foreground">
-                                {ord.created_at} · {ord.items.map((i) => `${i.quantity}x ${i.product_name}`).join(", ")}
+                                {ord.created_at} ·{" "}
+                                {ord.items
+                                  .map((i) => `${i.quantity}x ${i.product_name}`)
+                                  .join(", ")}
                               </p>
                             </div>
                             <div className="text-right">
-                              <span className="font-bold text-primary text-sm">{etb(ord.total)}</span>
+                              <span className="font-bold text-primary text-sm">
+                                {etb(ord.total)}
+                              </span>
                             </div>
                           </div>
                         ))}
@@ -823,9 +879,15 @@ export function CustomerDashboard() {
                                 </span>
                                 <StatusBadge s={q.status} />
                               </div>
-                              <p className="text-xs text-muted-foreground truncate">{q.created_at}</p>
+                              <p className="text-xs text-muted-foreground truncate">
+                                {q.created_at}
+                              </p>
                             </div>
-                            <Button size="sm" variant="ghost" className="text-xs text-primary shrink-0">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-xs text-primary shrink-0"
+                            >
                               View
                             </Button>
                           </div>
@@ -845,9 +907,14 @@ export function CustomerDashboard() {
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
                     <h1 className="text-2xl font-bold tracking-tight text-foreground">My Orders</h1>
-                    <p className="text-sm text-muted-foreground mt-1">Track manufacturing, shipping status, and order history</p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Track manufacturing, shipping status, and order history
+                    </p>
                   </div>
-                  <Button asChild className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2">
+                  <Button
+                    asChild
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
+                  >
                     <Link to="/products">
                       <Plus className="h-4 w-4" />
                       New Order
@@ -895,7 +962,10 @@ export function CustomerDashboard() {
                       <tbody className="divide-y divide-border">
                         {filteredOrders.length === 0 ? (
                           <tr>
-                            <td colSpan={6} className="py-12 text-center text-muted-foreground/60 text-sm">
+                            <td
+                              colSpan={6}
+                              className="py-12 text-center text-muted-foreground/60 text-sm"
+                            >
                               No orders found matching your search.
                             </td>
                           </tr>
@@ -910,7 +980,9 @@ export function CustomerDashboard() {
                               className="hover:bg-muted/40 transition-colors cursor-pointer"
                             >
                               <td className="px-5 py-4 font-bold text-foreground">#{o.order_id}</td>
-                              <td className="px-5 py-4 text-muted-foreground text-xs">{o.created_at}</td>
+                              <td className="px-5 py-4 text-muted-foreground text-xs">
+                                {o.created_at}
+                              </td>
                               <td className="px-5 py-4 text-xs text-muted-foreground max-w-xs truncate">
                                 {o.items.map((i) => `${i.quantity}x ${i.product_name}`).join(", ")}
                               </td>
@@ -919,7 +991,11 @@ export function CustomerDashboard() {
                                 <StatusBadge s={o.status} />
                               </td>
                               <td className="px-5 py-4 text-right">
-                                <Button size="sm" variant="ghost" className="text-xs text-primary font-semibold">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="text-xs text-primary font-semibold"
+                                >
                                   Track Details
                                 </Button>
                               </td>
@@ -940,10 +1016,17 @@ export function CustomerDashboard() {
               <div className="space-y-6 animate-in fade-in-50 duration-200">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-foreground">My Quote Requests</h1>
-                    <p className="text-sm text-muted-foreground mt-1">Review custom engineering and fabrication inquiries</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">
+                      My Quote Requests
+                    </h1>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Review custom engineering and fabrication inquiries
+                    </p>
                   </div>
-                  <Button asChild className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2">
+                  <Button
+                    asChild
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
+                  >
                     <Link to="/quote">
                       <Plus className="h-4 w-4" />
                       Request New Quote
@@ -970,20 +1053,31 @@ export function CustomerDashboard() {
                         className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4 hover:shadow-md transition-shadow"
                       >
                         <div className="flex items-center justify-between border-b border-border pb-3">
-                          <span className="text-xs font-semibold text-muted-foreground/60">Inquiry #{q.quote_id}</span>
+                          <span className="text-xs font-semibold text-muted-foreground/60">
+                            Inquiry #{q.quote_id}
+                          </span>
                           <StatusBadge s={q.status} />
                         </div>
                         <div>
                           <h3 className="font-bold text-foreground text-base">{q.subject}</h3>
-                          <p className="text-xs text-muted-foreground/60 mt-1">Submitted on {q.created_at}</p>
+                          <p className="text-xs text-muted-foreground/60 mt-1">
+                            Submitted on {q.created_at}
+                          </p>
                           <div className="mt-3 rounded-xl bg-muted/50 p-3.5 text-xs text-foreground leading-relaxed whitespace-pre-wrap">
                             {q.message}
                           </div>
                         </div>
                         <div className="pt-2 flex justify-between items-center text-xs">
                           <span className="text-muted-foreground/60">Response via: {q.email}</span>
-                          <Button asChild size="sm" variant="outline" className="text-xs text-primary">
-                            <a href={`mailto:info@polarfiber.et?subject=Follow-up on Inquiry #${q.quote_id}`}>
+                          <Button
+                            asChild
+                            size="sm"
+                            variant="outline"
+                            className="text-xs text-primary"
+                          >
+                            <a
+                              href={`mailto:info@polarfiber.et?subject=Follow-up on Inquiry #${q.quote_id}`}
+                            >
                               Follow Up
                             </a>
                           </Button>
@@ -1002,8 +1096,12 @@ export function CustomerDashboard() {
               <div className="space-y-6 animate-in fade-in-50 duration-200">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-foreground">Direct Messages</h1>
-                    <p className="text-sm text-muted-foreground mt-1">Chat directly with Polar Fiber engineers, sales, and support</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">
+                      Direct Messages
+                    </h1>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Chat directly with Polar Fiber engineers, sales, and support
+                    </p>
                   </div>
                   <Button
                     onClick={() => setNewMessageDialogOpen(true)}
@@ -1028,15 +1126,28 @@ export function CustomerDashboard() {
                     </div>
 
                     <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
-                      {filteredConversations.length === 0 ? (
-                        <p className="p-8 text-center text-xs text-muted-foreground/60">No message threads found.</p>
+                      {conversationsQuery.isLoading ? (
+                        <p className="p-8 text-center text-xs text-muted-foreground/60">Loading conversations...</p>
+                      ) : conversationsQuery.data?.length === 0 ? (
+                        <p className="p-8 text-center text-xs text-muted-foreground/60">
+                          No message threads found. Start a new conversation!
+                        </p>
                       ) : (
                         filteredConversations.map((conv) => {
-                          const isSelected = selectedConversation?.id === conv.id;
+                          const isSelected = selectedConversation?.conversation_id === conv.conversation_id;
                           return (
                             <div
-                              key={conv.id}
-                              onClick={() => setSelectedConversation(conv)}
+                              key={conv.conversation_id}
+                              onClick={() => {
+                                setSelectedConversation(conv);
+                                setLoadingMessages(true);
+                                fetchConversationMessages({ data: { conversation_id: conv.conversation_id } })
+                                  .then((msgs) => {
+                                    setConversationMessages(msgs);
+                                    setLoadingMessages(false);
+                                  })
+                                  .catch(() => setLoadingMessages(false));
+                              }}
                               className={`p-3.5 rounded-xl border transition-all cursor-pointer ${
                                 isSelected
                                   ? "border-primary bg-primary/5 shadow-xs"
@@ -1063,9 +1174,16 @@ export function CustomerDashboard() {
                                 {conv.subject}
                               </h4>
                               <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">
-                                {conv.messages[conv.messages.length - 1]?.text}
+                                {conv.last_message_text ?? "No messages yet"}
                               </p>
-                              <p className="text-[10px] text-muted-foreground/60 mt-1 text-right">{conv.updated_at}</p>
+                              <p className="text-[10px] text-muted-foreground/60 mt-1 text-right">
+                                {conv.updated_at}
+                              </p>
+                              {conv.unread_count && conv.unread_count > 0 && (
+                                <span className="text-[10px] font-bold text-emerald-600">
+                                  {conv.unread_count} unread
+                                </span>
+                              )}
                             </div>
                           );
                         })
@@ -1080,8 +1198,12 @@ export function CustomerDashboard() {
                         {/* Conversation Header */}
                         <div className="border-b border-border pb-3 flex items-center justify-between">
                           <div>
-                            <h3 className="font-bold text-base text-foreground">{selectedConversation.subject}</h3>
-                            <p className="text-xs text-muted-foreground/60 mt-0.5">Topic: {selectedConversation.topic}</p>
+                            <h3 className="font-bold text-base text-foreground">
+                              {selectedConversation.subject}
+                            </h3>
+                            <p className="text-xs text-muted-foreground/60 mt-0.5">
+                              Topic: {selectedConversation.topic}
+                            </p>
                           </div>
                           <span
                             className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
@@ -1098,30 +1220,37 @@ export function CustomerDashboard() {
 
                         {/* Message History Bubble Stream */}
                         <div className="flex-1 space-y-3.5 overflow-y-auto max-h-[380px] p-2">
-                          {selectedConversation.messages.map((m) => {
-                            const isMe = m.sender === "customer";
-                            return (
-                              <div
-                                key={m.id}
-                                className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
-                              >
-                                <div className="flex items-center gap-1.5 mb-1 text-[11px] text-muted-foreground/60">
-                                  <span className="font-semibold text-muted-foreground">{m.senderName}</span>
-                                  <span>·</span>
-                                  <span>{m.timestamp}</span>
+                          {loadingMessages ? (
+                            <p className="p-4 text-center text-xs text-muted-foreground/60">Loading messages...</p>
+                          ) : conversationMessages.length === 0 ? (
+                            <p className="p-8 text-center text-xs text-muted-foreground/60">
+                              No messages in this conversation yet.
+                            </p>
+                          ) : (
+                            conversationMessages.map((m) => {
+                              const isMe = m.sender_type === "customer";
+                              return (
+                                <div key={m.message_id} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                                  <div className="flex items-center gap-1.5 mb-1 text-[11px] text-muted-foreground/60">
+                                    <span className="font-semibold text-muted-foreground">
+                                      {m.sender_name}
+                                    </span>
+                                    <span>·</span>
+                                    <span>{new Date(m.created_at).toLocaleString()}</span>
+                                  </div>
+                                  <div
+                                    className={`rounded-2xl px-4 py-3 text-sm leading-relaxed max-w-[85%] whitespace-pre-wrap ${
+                                      isMe
+                                        ? "bg-primary text-primary-foreground rounded-tr-xs"
+                                        : "bg-muted text-foreground rounded-tl-xs border border-border/60"
+                                    }`}
+                                  >
+                                    {m.text}
+                                  </div>
                                 </div>
-                                <div
-                                  className={`rounded-2xl px-4 py-3 text-sm leading-relaxed max-w-[85%] whitespace-pre-wrap ${
-                                    isMe
-                                      ? "bg-primary text-primary-foreground rounded-tr-xs"
-                                      : "bg-muted text-foreground rounded-tl-xs border border-border/60"
-                                  }`}
-                                >
-                                  {m.text}
-                                </div>
-                              </div>
-                            );
-                          })}
+                              );
+                            })
+                          )}
                         </div>
 
                         {/* Reply Input Box */}
@@ -1137,9 +1266,11 @@ export function CustomerDashboard() {
                               }
                             }}
                             className="bg-muted/50 border-border flex-1"
+                            disabled={loadingMessages}
                           />
                           <Button
                             onClick={handleSendReply}
+                            disabled={loadingMessages || !replyInput.trim()}
                             className="bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5"
                           >
                             <Send className="h-4 w-4" />
@@ -1166,46 +1297,80 @@ export function CustomerDashboard() {
             {activeTab === "favorites" && (
               <div className="space-y-6 animate-in fade-in-50 duration-200">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-foreground">Favorite Products</h1>
-                  <p className="text-sm text-muted-foreground mt-1">Quick access to fiberglass items you order regularly</p>
+                  <h1 className="text-2xl font-bold tracking-tight text-foreground">
+                    Favorite Products
+                  </h1>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Quick access to fiberglass items you order regularly
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-                  {favoriteProducts.map((p) => (
-                    <div
-                      key={p.product_id}
-                      className="bg-card border border-border rounded-2xl p-4 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow"
-                    >
-                      <div>
-                        {p.image ? (
-                          <img
-                            src={p.image}
-                            alt={p.name}
-                            className="h-36 w-full rounded-xl object-cover mb-3"
-                          />
-                        ) : (
-                          <div className="h-36 w-full rounded-xl bg-muted flex items-center justify-center text-muted-foreground/60 mb-3">
-                            <Package className="h-8 w-8" />
-                          </div>
-                        )}
-                        <h4 className="font-bold text-foreground text-sm line-clamp-1">{p.name}</h4>
-                        <p className="text-xs text-muted-foreground mt-0.5">{p.category}</p>
-                        <p className="font-bold text-primary text-base mt-2">{etb(p.price)}</p>
-                      </div>
-
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          addToCart(p.product_id, 1);
-                          toast.success(`Added ${p.name} to cart`);
-                        }}
-                        className="mt-4 w-full bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold gap-1.5"
-                      >
-                        <ShoppingBag className="h-3.5 w-3.5" />
-                        Add to Cart
-                      </Button>
+                  {favoritesQuery.isLoading ? (
+                    <div className="col-span-4 p-8 text-center text-xs text-muted-foreground/60">Loading favorites...</div>
+                  ) : favoritesQuery.data?.length === 0 ? (
+                    <div className="col-span-4 bg-card border border-border rounded-2xl p-12 text-center">
+                      <EmptyState
+                        icon={Heart}
+                        title="No favorites yet"
+                        description="Browse products and click the heart icon to add them to your favorites for quick access."
+                        actionLabel="Browse Products"
+                        onAction={() => nav({ to: "/products" })}
+                        className="border-none py-4"
+                      />
                     </div>
-                  ))}
+                  ) : (
+                    (favoritesQuery.data ?? []).map((p) => (
+                      <div
+                        key={p.product_id}
+                        className="bg-card border border-border rounded-2xl p-4 shadow-xs flex flex-col justify-between hover:shadow-md transition-shadow relative"
+                      >
+                        <div>
+                          {p.product_image ? (
+                            <img
+                              src={p.has_db_image ? `/api/images/${p.product_id}` : (p.product_image || `https://placehold.co/800x600/e2e8f0/64748b?text=${encodeURIComponent(p.product_name)}`)}
+                              alt={p.product_name}
+                              className="h-36 w-full rounded-xl object-cover mb-3"
+                              onError={(e) => {
+                                const img = e.currentTarget;
+                                img.onerror = null;
+                                img.src = `https://placehold.co/800x600/e2e8f0/64748b?text=${encodeURIComponent(p.product_name)}`;
+                              }}
+                            />
+                          ) : (
+                            <div className="h-36 w-full rounded-xl bg-muted flex items-center justify-center text-muted-foreground/60 mb-3">
+                              <Package className="h-8 w-8" />
+                            </div>
+                          )}
+                          <h4 className="font-bold text-foreground text-sm line-clamp-1">{p.product_name}</h4>
+                          {p.product_capacity && <p className="text-xs text-muted-foreground mt-0.5">{p.product_capacity}</p>}
+                          <p className="font-bold text-primary text-base mt-2">{etb(p.product_price ?? 0)}</p>
+                        </div>
+
+                        <div className="flex gap-2 mt-4">
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              addToCart(p.product_id, 1);
+                              toast.success(`Added ${p.product_name} to cart`);
+                            }}
+                            className="flex-1 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold gap-1.5"
+                          >
+                            <ShoppingBag className="h-3.5 w-3.5" />
+                            Add to Cart
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-rose-500 hover:text-rose-700"
+                            onClick={() => mutateRemoveFavorite({ data: { product_id: p.product_id } }).then(() => favoritesQuery.refetch())}
+                          >
+                            <Heart className="h-3.5 w-3.5 fill-current" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -1216,8 +1381,12 @@ export function CustomerDashboard() {
             {activeTab === "profile" && (
               <div className="space-y-6 max-w-2xl animate-in fade-in-50 duration-200">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-foreground">Profile & Security</h1>
-                  <p className="text-sm text-muted-foreground mt-1">Manage your personal information and password</p>
+                  <h1 className="text-2xl font-bold tracking-tight text-foreground">
+                    Profile & Security
+                  </h1>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Manage your personal information and password
+                  </p>
                 </div>
 
                 {/* Profile Details Form */}
@@ -1230,7 +1399,9 @@ export function CustomerDashboard() {
                   </h3>
                   <div className="space-y-3">
                     <div>
-                      <Label className="text-xs font-semibold text-muted-foreground">Full Name</Label>
+                      <Label className="text-xs font-semibold text-muted-foreground">
+                        Full Name
+                      </Label>
                       <Input
                         value={profileName}
                         onChange={(e) => setProfileName(e.target.value)}
@@ -1239,11 +1410,19 @@ export function CustomerDashboard() {
                       />
                     </div>
                     <div>
-                      <Label className="text-xs font-semibold text-muted-foreground">Email Address (Read-only)</Label>
-                      <Input value={user.email} disabled className="mt-1 bg-muted/50 text-muted-foreground" />
+                      <Label className="text-xs font-semibold text-muted-foreground">
+                        Email Address (Read-only)
+                      </Label>
+                      <Input
+                        value={user.email}
+                        disabled
+                        className="mt-1 bg-muted/50 text-muted-foreground"
+                      />
                     </div>
                     <div>
-                      <Label className="text-xs font-semibold text-muted-foreground">Phone Number</Label>
+                      <Label className="text-xs font-semibold text-muted-foreground">
+                        Phone Number
+                      </Label>
                       <Input
                         value={profilePhone}
                         onChange={(e) => setProfilePhone(e.target.value)}
@@ -1273,7 +1452,9 @@ export function CustomerDashboard() {
                   </h3>
                   <div className="space-y-3">
                     <div>
-                      <Label className="text-xs font-semibold text-muted-foreground">Current Password</Label>
+                      <Label className="text-xs font-semibold text-muted-foreground">
+                        Current Password
+                      </Label>
                       <Input
                         type="password"
                         value={currentPassword}
@@ -1283,7 +1464,9 @@ export function CustomerDashboard() {
                       />
                     </div>
                     <div>
-                      <Label className="text-xs font-semibold text-muted-foreground">New Password</Label>
+                      <Label className="text-xs font-semibold text-muted-foreground">
+                        New Password
+                      </Label>
                       <Input
                         type="password"
                         value={newPassword}
@@ -1293,7 +1476,9 @@ export function CustomerDashboard() {
                       />
                     </div>
                     <div>
-                      <Label className="text-xs font-semibold text-muted-foreground">Confirm New Password</Label>
+                      <Label className="text-xs font-semibold text-muted-foreground">
+                        Confirm New Password
+                      </Label>
                       <Input
                         type="password"
                         value={confirmPassword}
@@ -1324,11 +1509,29 @@ export function CustomerDashboard() {
               <div className="space-y-6 animate-in fade-in-50 duration-200">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-foreground">Delivery Addresses</h1>
-                    <p className="text-sm text-muted-foreground mt-1">Manage delivery locations and site drop-offs across Ethiopia</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">
+                      Delivery Addresses
+                    </h1>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Manage delivery locations and site drop-offs across Ethiopia
+                    </p>
                   </div>
                   <Button
-                    onClick={() => setNewAddressDialogOpen(true)}
+                    onClick={() => {
+                      setEditingAddressId(null);
+                      setNewAddressForm({
+                        label: "New Address",
+                        recipient: user?.name ?? "",
+                        phone: user?.phone ?? "",
+                        city: "Addis Ababa",
+                        region: "",
+                        line1: "",
+                        line2: "",
+                        country: "Ethiopia",
+                        is_default: false,
+                      });
+                      setNewAddressDialogOpen(true);
+                    }}
                     className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
                   >
                     <Plus className="h-4 w-4" />
@@ -1337,62 +1540,96 @@ export function CustomerDashboard() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  {addresses.map((addr) => (
-                    <div
-                      key={addr.id}
-                      className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4 hover:shadow-md transition-shadow relative"
-                    >
-                      <div className="flex items-center justify-between border-b border-border pb-3">
-                        <div className="flex items-center gap-2">
-                          <MapPin className="h-4 w-4 text-primary" />
-                          <h3 className="font-bold text-foreground text-sm">{addr.label}</h3>
-                        </div>
-                        {addr.isDefault && (
-                          <span className="bg-primary/10 text-primary text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-primary/20">
-                            Default
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="text-xs text-muted-foreground space-y-1">
-                        <p className="font-semibold text-foreground">{addr.recipient}</p>
-                        <p>{addr.phone}</p>
-                        <p>{addr.subcity}, {addr.city}</p>
-                        <p className="text-muted-foreground italic mt-1">{addr.details}</p>
-                      </div>
-
-                      <div className="pt-2 flex items-center justify-between border-t border-border">
-                        {!addr.isDefault ? (
-                          <button
-                            onClick={() => {
-                              setAddresses(
-                                addresses.map((a) => ({
-                                  ...a,
-                                  isDefault: a.id === addr.id,
-                                })),
-                              );
-                              toast.success("Default address updated");
-                            }}
-                            className="text-xs font-semibold text-primary hover:underline cursor-pointer"
-                          >
-                            Set as default
-                          </button>
-                        ) : (
-                          <span className="text-xs text-muted-foreground/60">Primary delivery address</span>
-                        )}
-
-                        <button
-                          onClick={() => {
-                            setAddresses(addresses.filter((a) => a.id !== addr.id));
-                            toast.success("Address removed");
-                          }}
-                          className="text-xs text-rose-500 hover:text-rose-700"
-                        >
-                          Remove
-                        </button>
-                      </div>
+                  {addressesQuery.isLoading ? (
+                    <p className="p-8 text-center text-xs text-muted-foreground/60 col-span-2">Loading addresses...</p>
+                  ) : addressesQuery.data?.length === 0 ? (
+                    <div className="col-span-2 bg-card border border-border rounded-2xl p-12 text-center">
+                      <EmptyState
+                        icon={MapPin}
+                        title="No addresses saved"
+                        description="Add your first delivery address for faster checkout."
+                        actionLabel="Add Address"
+                        onAction={() => {
+                          setEditingAddressId(null);
+                          setNewAddressForm({
+                            label: "New Address",
+                            recipient: user?.name ?? "",
+                            phone: user?.phone ?? "",
+                            city: "Addis Ababa",
+                            region: "",
+                            line1: "",
+                            line2: "",
+                            country: "Ethiopia",
+                            is_default: false,
+                          });
+                          setNewAddressDialogOpen(true);
+                        }}
+                        className="border-none py-4"
+                      />
                     </div>
-                  ))}
+                  ) : (
+                    (addressesQuery.data ?? []).map((addr) => (
+                      <div
+                        key={addr.address_id}
+                        className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4 hover:shadow-md transition-shadow relative"
+                      >
+                        <div className="flex items-center justify-between border-b border-border pb-3">
+                          <div className="flex items-center gap-2">
+                            <MapPin className="h-4 w-4 text-primary" />
+                            <h3 className="font-bold text-foreground text-sm">{addr.label}</h3>
+                          </div>
+                          {addr.is_default ? (
+                            <span className="bg-primary/10 text-primary text-[11px] font-bold px-2.5 py-0.5 rounded-full border border-primary/20">
+                              Default
+                            </span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-xs text-primary gap-1"
+                              onClick={() => handleSetDefaultAddress(addr.address_id)}
+                            >
+                              <MapPin className="h-3 w-3" />
+                              Set as default
+                            </Button>
+                          )}
+                        </div>
+
+                        <div className="text-xs text-muted-foreground space-y-1">
+                          <p className="font-semibold text-foreground">{addr.recipient}</p>
+                          <p>{addr.phone}</p>
+                          <p>
+                            {addr.line1}
+                            {addr.line2 && <span>, {addr.line2}</span>}
+                          </p>
+                          <p>
+                            {addr.region}, {addr.city}, {addr.country}
+                          </p>
+                        </div>
+
+                        <div className="pt-2 flex items-center justify-between border-t border-border">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-xs gap-1"
+                            onClick={() => handleEditAddress(addr)}
+                          >
+                            <Pencil className="h-3 w-3" />
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-xs text-rose-500 hover:text-rose-700 gap-1"
+                            onClick={() => handleDeleteAddress(addr.address_id)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -1404,8 +1641,12 @@ export function CustomerDashboard() {
               <div className="space-y-6 max-w-2xl animate-in fade-in-50 duration-200">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-foreground">Account Notifications</h1>
-                    <p className="text-sm text-muted-foreground mt-1">Updates on your equipment orders and quotes</p>
+                    <h1 className="text-2xl font-bold tracking-tight text-foreground">
+                      Account Notifications
+                    </h1>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Updates on your equipment orders and quotes
+                    </p>
                   </div>
                   {unreadNotificationsCount > 0 && (
                     <Button
@@ -1439,7 +1680,9 @@ export function CustomerDashboard() {
                           <p className="text-sm font-semibold text-foreground">{n.title}</p>
                           <span className="text-[11px] text-muted-foreground/60">{n.date}</span>
                         </div>
-                        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{n.message}</p>
+                        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                          {n.message}
+                        </p>
                       </div>
                     </div>
                   ))}
@@ -1453,8 +1696,12 @@ export function CustomerDashboard() {
             {activeTab === "support" && (
               <div className="space-y-6 max-w-3xl animate-in fade-in-50 duration-200">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-foreground">Customer Support</h1>
-                  <p className="text-sm text-muted-foreground mt-1">Direct contact with Polar Fiber engineering and sales engineers</p>
+                  <h1 className="text-2xl font-bold tracking-tight text-foreground">
+                    Customer Support
+                  </h1>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Direct contact with Polar Fiber engineering and sales engineers
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1463,7 +1710,9 @@ export function CustomerDashboard() {
                       <Phone className="h-5 w-5" />
                     </div>
                     <h3 className="font-bold text-foreground">Direct Sales & Helpdesk</h3>
-                    <p className="text-xs text-muted-foreground">Available Monday - Saturday, 8:00 AM - 6:00 PM</p>
+                    <p className="text-xs text-muted-foreground">
+                      Available Monday - Saturday, 8:00 AM - 6:00 PM
+                    </p>
                     <p className="font-semibold text-sm text-primary pt-1">+251 911 234 567</p>
                   </div>
 
@@ -1472,8 +1721,12 @@ export function CustomerDashboard() {
                       <Mail className="h-5 w-5" />
                     </div>
                     <h3 className="font-bold text-foreground">Engineering Support Email</h3>
-                    <p className="text-xs text-muted-foreground">Send technical drawings and specs</p>
-                    <p className="font-semibold text-sm text-emerald-600 pt-1">support@polarfiber.et</p>
+                    <p className="text-xs text-muted-foreground">
+                      Send technical drawings and specs
+                    </p>
+                    <p className="font-semibold text-sm text-emerald-600 pt-1">
+                      support@polarfiber.et
+                    </p>
                   </div>
                 </div>
 
@@ -1483,15 +1736,22 @@ export function CustomerDashboard() {
                   </h3>
                   <div className="space-y-3 text-sm">
                     <div className="p-3.5 rounded-xl bg-muted/50">
-                      <p className="font-semibold text-foreground text-xs">How do I maintain my fiberglass water tanker?</p>
+                      <p className="font-semibold text-foreground text-xs">
+                        How do I maintain my fiberglass water tanker?
+                      </p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Polar Fiber water tankers feature food-grade gelcoat linings that resist algae and bacterial growth. Simply flush with clean potable water once every six months.
+                        Polar Fiber water tankers feature food-grade gelcoat linings that resist
+                        algae and bacterial growth. Simply flush with clean potable water once every
+                        six months.
                       </p>
                     </div>
                     <div className="p-3.5 rounded-xl bg-muted/50">
-                      <p className="font-semibold text-foreground text-xs">What is the warranty period for roofing sheets?</p>
+                      <p className="font-semibold text-foreground text-xs">
+                        What is the warranty period for roofing sheets?
+                      </p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Our reinforced fiberglass corrugated sheets come with a 15-year weather and UV resistance manufacturer warranty.
+                        Our reinforced fiberglass corrugated sheets come with a 15-year weather and
+                        UV resistance manufacturer warranty.
                       </p>
                     </div>
                   </div>
@@ -1515,10 +1775,12 @@ export function CustomerDashboard() {
       {newAddressDialogOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4">
           <form
-            onSubmit={handleAddAddress}
+            onSubmit={editingAddressId ? handleUpdateAddress : handleAddAddress}
             className="w-full max-w-md rounded-2xl bg-card p-6 shadow-2xl space-y-4"
           >
-            <h3 className="font-bold text-lg text-foreground">Add New Delivery Location</h3>
+            <h3 className="font-bold text-lg text-foreground">
+              {editingAddressId ? "Edit Delivery Location" : "Add New Delivery Location"}
+            </h3>
             <div className="space-y-3">
               <div>
                 <Label className="text-xs">Location Name / Label</Label>
@@ -1546,30 +1808,74 @@ export function CustomerDashboard() {
                 />
               </div>
               <div>
-                <Label className="text-xs">Sub-city / Area</Label>
+                <Label className="text-xs">Address Line 1</Label>
                 <Input
-                  value={newAddressForm.subcity}
-                  onChange={(e) => setNewAddressForm({ ...newAddressForm, subcity: e.target.value })}
-                  placeholder="e.g. Bole Sub-City, Woreda 04"
-                  required
-                />
-              </div>
-              <div>
-                <Label className="text-xs">Detailed Location / Landmark</Label>
-                <Input
-                  value={newAddressForm.details}
-                  onChange={(e) => setNewAddressForm({ ...newAddressForm, details: e.target.value })}
+                  value={newAddressForm.line1}
+                  onChange={(e) => setNewAddressForm({ ...newAddressForm, line1: e.target.value })}
                   placeholder="e.g. Next to Edna Mall, Block B"
                   required
                 />
               </div>
+              <div>
+                <Label className="text-xs">Address Line 2 (Optional)</Label>
+                <Input
+                  value={newAddressForm.line2}
+                  onChange={(e) => setNewAddressForm({ ...newAddressForm, line2: e.target.value })}
+                  placeholder="e.g. Apartment 4B"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs">City</Label>
+                  <Input
+                    value={newAddressForm.city}
+                    onChange={(e) => setNewAddressForm({ ...newAddressForm, city: e.target.value })}
+                    required
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Region / Sub-city</Label>
+                  <Input
+                    value={newAddressForm.region}
+                    onChange={(e) => setNewAddressForm({ ...newAddressForm, region: e.target.value })}
+                    placeholder="e.g. Bole"
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs">Country</Label>
+                <Input
+                  value={newAddressForm.country}
+                  onChange={(e) => setNewAddressForm({ ...newAddressForm, country: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="is_default"
+                  checked={newAddressForm.is_default}
+                  onChange={(e) => setNewAddressForm({ ...newAddressForm, is_default: e.target.checked })}
+                  className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                />
+                <Label htmlFor="is_default" className="text-xs cursor-pointer">
+                  Set as default delivery address
+                </Label>
+              </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
-              <Button type="button" variant="ghost" onClick={() => setNewAddressDialogOpen(false)}>
+              <Button type="button" variant="ghost" onClick={() => {
+                setNewAddressDialogOpen(false);
+                setEditingAddressId(null);
+              }}>
                 Cancel
               </Button>
-              <Button type="submit" className="bg-primary hover:bg-primary/90 text-primary-foreground">
-                Save Address
+              <Button
+                type="submit"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground"
+              >
+                {editingAddressId ? "Update Address" : "Save Address"}
               </Button>
             </div>
           </form>
@@ -1586,7 +1892,9 @@ export function CustomerDashboard() {
             <h3 className="font-bold text-lg text-foreground">New Message to Polar Fiber</h3>
             <div className="space-y-3">
               <div>
-                <Label className="text-xs font-semibold text-muted-foreground">Department / Topic</Label>
+                <Label className="text-xs font-semibold text-muted-foreground">
+                  Department / Topic
+                </Label>
                 <select
                   value={newMessageForm.topic}
                   onChange={(e) => setNewMessageForm({ ...newMessageForm, topic: e.target.value })}
@@ -1603,7 +1911,9 @@ export function CustomerDashboard() {
                 <Label className="text-xs font-semibold text-muted-foreground">Subject</Label>
                 <Input
                   value={newMessageForm.subject}
-                  onChange={(e) => setNewMessageForm({ ...newMessageForm, subject: e.target.value })}
+                  onChange={(e) =>
+                    setNewMessageForm({ ...newMessageForm, subject: e.target.value })
+                  }
                   placeholder="e.g. Inquiring on tank flange connection specs"
                   className="mt-1"
                   required
@@ -1625,7 +1935,10 @@ export function CustomerDashboard() {
               <Button type="button" variant="ghost" onClick={() => setNewMessageDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" className="bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5">
+              <Button
+                type="submit"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5"
+              >
                 <Send className="h-3.5 w-3.5" />
                 Send Message
               </Button>

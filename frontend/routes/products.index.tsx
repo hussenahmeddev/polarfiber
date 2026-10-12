@@ -34,7 +34,13 @@ function Products() {
         (cat === "All" || p.category === cat) && p.name.toLowerCase().includes(q.toLowerCase()),
     )
     .sort((a, b) =>
-      sort === "low" ? a.price - b.price : sort === "high" ? b.price - a.price : sort === "name" ? a.name.localeCompare(b.name) : 0,
+      sort === "low"
+        ? a.price - b.price
+        : sort === "high"
+          ? b.price - a.price
+          : sort === "name"
+            ? a.name.localeCompare(b.name)
+            : 0,
     );
   return (
     <div className="mx-auto max-w-6xl px-4 py-12">

@@ -49,13 +49,30 @@ describe("Phase 2: Permission Middleware and Map", () => {
       }
     });
 
-    it("staff role DOES NOT have categories.*, reports.*, audit.*, settings.*, team.* wildcard namespaces", () => {
-      const namespaces = ["categories", "reports", "audit", "settings", "team"];
-      for (const ns of namespaces) {
-        expect(hasPermission("staff", `${ns}.view`)).toBe(false);
-        expect(hasPermission("staff", `${ns}.manage`)).toBe(false);
-        expect(hasPermission("staff", `${ns}.custom_action`)).toBe(false);
-      }
+    it("staff role has .view for categories, reports, settings but NOT manage/create/update/delete", () => {
+      // Staff CAN view these
+      expect(hasPermission("staff", "categories.view")).toBe(true);
+      expect(hasPermission("staff", "reports.view")).toBe(true);
+      expect(hasPermission("staff", "settings.view")).toBe(true);
+
+      // Staff CANNOT manage/create/update/delete these
+      expect(hasPermission("staff", "categories.create")).toBe(false);
+      expect(hasPermission("staff", "categories.update")).toBe(false);
+      expect(hasPermission("staff", "categories.delete")).toBe(false);
+      expect(hasPermission("staff", "categories.manage")).toBe(false);
+      expect(hasPermission("staff", "reports.export")).toBe(false);
+      expect(hasPermission("staff", "reports.manage")).toBe(false);
+      expect(hasPermission("staff", "settings.update")).toBe(false);
+      expect(hasPermission("staff", "settings.manage")).toBe(false);
+
+      // Staff CANNOT access audit.* or team.* at all
+      expect(hasPermission("staff", "audit.view")).toBe(false);
+      expect(hasPermission("staff", "audit.manage")).toBe(false);
+      expect(hasPermission("staff", "team.view")).toBe(false);
+      expect(hasPermission("staff", "team.create")).toBe(false);
+      expect(hasPermission("staff", "team.update")).toBe(false);
+      expect(hasPermission("staff", "team.delete")).toBe(false);
+      expect(hasPermission("staff", "team.manage")).toBe(false);
     });
 
     it("admin role has all permissions", () => {

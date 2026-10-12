@@ -124,7 +124,9 @@ export function AdminSidebarLayout({
             <Link to="/" className="flex items-center gap-3">
               <img src="/images/logo.png" alt="Polar Fiber" className="h-9 w-auto object-contain" />
               <div>
-                <p className="text-sm font-bold leading-tight text-sidebar-foreground">Polar Fiber</p>
+                <p className="text-sm font-bold leading-tight text-sidebar-foreground">
+                  Polar Fiber
+                </p>
                 <p className="text-[11px] font-semibold text-sidebar-primary tracking-wide uppercase">
                   {consoleTitle}
                 </p>
@@ -227,7 +229,11 @@ export function AdminSidebarLayout({
                           : "bg-muted text-muted-foreground",
                     )}
                   >
-                    {user?.role === "staff" ? "Staff" : user?.role === "admin" ? "Admin" : "Customer"}
+                    {user?.role === "staff"
+                      ? "Staff"
+                      : user?.role === "admin"
+                        ? "Admin"
+                        : "Customer"}
                   </span>
                   <p className="truncate text-[10px] text-sidebar-foreground/60">{user?.email}</p>
                 </div>

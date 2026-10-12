@@ -37,12 +37,20 @@ function ProductDetail() {
         </Link>
       </div>
     );
+  
+  const imgSrc = p.has_db_image ? `/api/images/${p.product_id}` : (p.image || `https://placehold.co/800x600/e2e8f0/64748b?text=${encodeURIComponent(p.name)}`);
+  
   return (
     <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 md:grid-cols-2">
       <img
-        src={p.image}
+        src={imgSrc}
         alt={p.name}
         className="aspect-[4/3] w-full rounded-2xl object-cover shadow-soft"
+        onError={(e) => {
+          const img = e.currentTarget;
+          img.onerror = null;
+          img.src = `https://placehold.co/800x600/e2e8f0/64748b?text=${encodeURIComponent(p.name)}`;
+        }}
       />
       <div>
         <Link to="/products" className="text-sm text-muted-foreground">

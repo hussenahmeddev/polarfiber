@@ -45,7 +45,9 @@ if (!colNames.has("locked_until")) {
 }
 
 if (!colNames.has("role")) {
-  await c.query("ALTER TABLE users ADD COLUMN role ENUM('admin','staff','customer') NOT NULL DEFAULT 'customer'");
+  await c.query(
+    "ALTER TABLE users ADD COLUMN role ENUM('admin','staff','customer') NOT NULL DEFAULT 'customer'",
+  );
   // Sync roles from user_roles
   try {
     await c.query(`
@@ -56,7 +58,9 @@ if (!colNames.has("role")) {
   } catch {}
 } else {
   try {
-    await c.query("ALTER TABLE users MODIFY COLUMN role ENUM('admin','staff','customer') NOT NULL DEFAULT 'customer'");
+    await c.query(
+      "ALTER TABLE users MODIFY COLUMN role ENUM('admin','staff','customer') NOT NULL DEFAULT 'customer'",
+    );
   } catch {}
 }
 
@@ -65,7 +69,9 @@ if (!colNames.has("must_change_password")) {
 }
 
 try {
-  await c.query("ALTER TABLE user_roles MODIFY COLUMN role ENUM('customer','admin','staff') NOT NULL");
+  await c.query(
+    "ALTER TABLE user_roles MODIFY COLUMN role ENUM('customer','admin','staff') NOT NULL",
+  );
 } catch {}
 
 // Ensure orders table columns
@@ -75,13 +81,17 @@ if (!orderColNames.has("is_paid")) {
   await c.query("ALTER TABLE orders ADD COLUMN is_paid TINYINT(1) NOT NULL DEFAULT 0");
 }
 if (!orderColNames.has("payment_method")) {
-  await c.query("ALTER TABLE orders ADD COLUMN payment_method VARCHAR(50) NOT NULL DEFAULT 'cash_on_delivery'");
+  await c.query(
+    "ALTER TABLE orders ADD COLUMN payment_method VARCHAR(50) NOT NULL DEFAULT 'cash_on_delivery'",
+  );
 }
 if (!orderColNames.has("internal_notes")) {
   await c.query("ALTER TABLE orders ADD COLUMN internal_notes TEXT NULL");
 }
 try {
-  await c.query("ALTER TABLE orders MODIFY COLUMN status ENUM('Pending','Confirmed','In Production','Out for Delivery','Delivered','Cancelled') NOT NULL DEFAULT 'Pending'");
+  await c.query(
+    "ALTER TABLE orders MODIFY COLUMN status ENUM('Pending','Confirmed','In Production','Out for Delivery','Delivered','Cancelled') NOT NULL DEFAULT 'Pending'",
+  );
 } catch {}
 
 // Ensure quote_requests table columns
@@ -97,7 +107,9 @@ if (!quoteColNames.has("assigned_to")) {
   await c.query("ALTER TABLE quote_requests ADD COLUMN assigned_to INT NULL");
 }
 try {
-  await c.query("ALTER TABLE quote_requests MODIFY COLUMN status ENUM('New','Reviewing','Pending Approval','Replied','Closed') NOT NULL DEFAULT 'New'");
+  await c.query(
+    "ALTER TABLE quote_requests MODIFY COLUMN status ENUM('New','Reviewing','Pending Approval','Replied','Closed') NOT NULL DEFAULT 'New'",
+  );
 } catch {}
 
 // Seed app_settings if needed
@@ -114,7 +126,9 @@ const [staffUsers] = await c.query(
   "SELECT u.user_id FROM users u JOIN user_roles r ON u.user_id = r.user_id WHERE r.role = 'staff' LIMIT 1",
 );
 if (staffUsers.length === 0) {
-  const [existingUser] = await c.query("SELECT user_id FROM users WHERE email = 'staff@polarfiber.com'");
+  const [existingUser] = await c.query(
+    "SELECT user_id FROM users WHERE email = 'staff@polarfiber.com'",
+  );
   let staffId;
   if (existingUser.length > 0) {
     staffId = existingUser[0].user_id;

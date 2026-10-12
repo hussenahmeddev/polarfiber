@@ -1,21 +1,21 @@
 // Shared types matching the MySQL tables (see db/schema.sql).
-export const CATEGORIES = [
-  "Water Tankers",
-  "Flower Pots",
-  "Roof Sheets",
-  "Fiber Pipes",
-] as const;
+export const CATEGORIES = ["Water Tankers", "Flower Pots", "Roof Sheets", "Fiber Pipes"] as const;
 export type Category = (typeof CATEGORIES)[number];
 
 export type Product = {
   product_id: number;
+  sku?: string | null;
   name: string;
+  slug?: string | null;
   category: Category;
   capacity?: string | null;
   price: number;
   stock: number;
   image: string;
   description: string;
+  status?: "active" | "draft" | "archived";
+  deleted_at?: string | null;
+  has_db_image?: number | boolean;
 };
 
 export type Role = "customer" | "admin" | "staff";
@@ -70,8 +70,10 @@ export type Quote = {
   user_id: number | null;
   name: string;
   email: string;
+  phone?: string | null;
   subject: string;
   message: string;
+  delivery_location?: string | null;
   quoted_amount?: number | null;
   valid_until?: string | null;
   assigned_to?: number | null;
@@ -227,4 +229,3 @@ export type AuditLog = {
 };
 
 export * from "./permissions";
-

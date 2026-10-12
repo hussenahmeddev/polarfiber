@@ -134,7 +134,9 @@ export function DataTable<T>({
                   >
                     {columns.map((col) => (
                       <td key={col.key} className={cn("px-4 py-3.5 align-middle", col.className)}>
-                        {col.render ? col.render(row) : (row as Record<string, unknown>)[col.key]?.toString() ?? ""}
+                        {col.render
+                          ? col.render(row)
+                          : ((row as Record<string, unknown>)[col.key]?.toString() ?? "")}
                       </td>
                     ))}
                   </tr>
@@ -155,7 +157,8 @@ export function DataTable<T>({
               <span className="font-semibold text-foreground">
                 {Math.min(pagination.page * pagination.pageSize, pagination.totalItems)}
               </span>{" "}
-              of <span className="font-semibold text-foreground">{pagination.totalItems}</span> results
+              of <span className="font-semibold text-foreground">{pagination.totalItems}</span>{" "}
+              results
             </p>
             <div className="flex items-center gap-1.5 self-end sm:self-auto">
               <Button

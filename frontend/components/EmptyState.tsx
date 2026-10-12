@@ -11,7 +11,6 @@ interface EmptyStateProps {
   className?: string | undefined;
 }
 
-
 export function EmptyState({
   icon: Icon,
   title,

@@ -84,7 +84,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const value: Ctx = {
     // undefined while the query is in-flight, null when definitely not logged in
-    user: loggedOut.current ? null : (me.isPending ? undefined : ((me.data as User | null) ?? null)),
+    user: loggedOut.current ? null : me.isPending ? undefined : ((me.data as User | null) ?? null),
     products: products.data ?? [],
     cart,
     refreshUser: async () => {

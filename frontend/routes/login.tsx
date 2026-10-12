@@ -63,7 +63,17 @@ function PasswordInput({
   );
 }
 
-function Field({ id, label, error, children }: { id: string; label: string; error?: string | undefined; children: ReactNode }) {
+function Field({
+  id,
+  label,
+  error,
+  children,
+}: {
+  id: string;
+  label: string;
+  error?: string | undefined;
+  children: ReactNode;
+}) {
   return (
     <div className="space-y-1.5">
       <Label htmlFor={id}>{label}</Label>
@@ -163,9 +173,15 @@ function Login() {
         <h2 className="mt-8 text-3xl font-bold leading-tight">Your Polar Fiber account</h2>
         <p className="mt-3 opacity-90">Track your orders and quote requests in one place.</p>
         <ul className="mt-8 space-y-4 text-sm">
-          <li className="flex gap-3"><Droplets className="h-5 w-5 shrink-0" /> Food-grade water tankers</li>
-          <li className="flex gap-3"><ShieldCheck className="h-5 w-5 shrink-0" /> 10-year tanker warranty</li>
-          <li className="flex gap-3"><Truck className="h-5 w-5 shrink-0" /> Order status from pending to delivered</li>
+          <li className="flex gap-3">
+            <Droplets className="h-5 w-5 shrink-0" /> Food-grade water tankers
+          </li>
+          <li className="flex gap-3">
+            <ShieldCheck className="h-5 w-5 shrink-0" /> 10-year tanker warranty
+          </li>
+          <li className="flex gap-3">
+            <Truck className="h-5 w-5 shrink-0" /> Order status from pending to delivered
+          </li>
         </ul>
       </section>
 
@@ -177,12 +193,19 @@ function Login() {
             <TabsTrigger value="register">Create account</TabsTrigger>
           </TabsList>
           {formError && (
-            <div role="alert" className="mt-4 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            <div
+              role="alert"
+              className="mt-4 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+            >
               {formError}
             </div>
           )}
           <TabsContent value="login">
-            <form noValidate className="space-y-4 rounded-xl border bg-card p-6 shadow-sm" onSubmit={onLogin}>
+            <form
+              noValidate
+              className="space-y-4 rounded-xl border bg-card p-6 shadow-sm"
+              onSubmit={onLogin}
+            >
               <Field id="li-email" label="Email" error={liErr["email"]}>
                 <Input
                   id="li-email"
@@ -212,22 +235,49 @@ function Login() {
             </form>
           </TabsContent>
           <TabsContent value="register">
-            <form noValidate className="space-y-4 rounded-xl border bg-card p-6 shadow-sm" onSubmit={onRegister}>
+            <form
+              noValidate
+              className="space-y-4 rounded-xl border bg-card p-6 shadow-sm"
+              onSubmit={onRegister}
+            >
               <Field id="rg-name" label="Full name" error={rgErr["name"]}>
-                <Input id="rg-name" autoComplete="name" value={rg.name} maxLength={100}
-                  onChange={(e) => setRg({ ...rg, name: e.target.value })} />
+                <Input
+                  id="rg-name"
+                  autoComplete="name"
+                  value={rg.name}
+                  maxLength={100}
+                  onChange={(e) => setRg({ ...rg, name: e.target.value })}
+                />
               </Field>
               <Field id="rg-email" label="Email" error={rgErr["email"]}>
-                <Input id="rg-email" type="email" autoComplete="email" value={rg.email} maxLength={255}
-                  onChange={(e) => setRg({ ...rg, email: e.target.value })} />
+                <Input
+                  id="rg-email"
+                  type="email"
+                  autoComplete="email"
+                  value={rg.email}
+                  maxLength={255}
+                  onChange={(e) => setRg({ ...rg, email: e.target.value })}
+                />
               </Field>
               <Field id="rg-phone" label="Phone">
-                <Input id="rg-phone" type="tel" autoComplete="tel" value={rg.phone} maxLength={20} placeholder="+251..."
-                  onChange={(e) => setRg({ ...rg, phone: e.target.value })} />
+                <Input
+                  id="rg-phone"
+                  type="tel"
+                  autoComplete="tel"
+                  value={rg.phone}
+                  maxLength={20}
+                  placeholder="+251..."
+                  onChange={(e) => setRg({ ...rg, phone: e.target.value })}
+                />
               </Field>
               <Field id="rg-pass" label="Password" error={rgErr["password"]}>
-                <PasswordInput id="rg-pass" autoComplete="new-password" value={rg.password}
-                  invalid={!!rgErr["password"]} onChange={(v) => setRg({ ...rg, password: v })} />
+                <PasswordInput
+                  id="rg-pass"
+                  autoComplete="new-password"
+                  value={rg.password}
+                  invalid={!!rgErr["password"]}
+                  onChange={(v) => setRg({ ...rg, password: v })}
+                />
               </Field>
               {submit("Create account")}
             </form>

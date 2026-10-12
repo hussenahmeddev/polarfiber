@@ -234,11 +234,20 @@ describe("Phase 4: Staff vs Admin Dashboard Filtering & Actions", () => {
       expect(screen.queryByTestId("delete-msg-btn")).toBeNull();
     });
 
-    it("verifies staff permission map restricts settings, team creation, categories and reports", () => {
-      expect(hasPermission("staff", "settings.view")).toBe(false);
+    it("verifies staff permission map restricts settings.update, team creation, categories CUD, reports.export, audit", () => {
+      // Staff CAN view these
+      expect(hasPermission("staff", "settings.view")).toBe(true);
+      expect(hasPermission("staff", "categories.view")).toBe(true);
+      expect(hasPermission("staff", "reports.view")).toBe(true);
+
+      // Staff CANNOT manage these
+      expect(hasPermission("staff", "settings.update")).toBe(false);
       expect(hasPermission("staff", "team.create")).toBe(false);
-      expect(hasPermission("staff", "categories.view")).toBe(false);
-      expect(hasPermission("staff", "reports.view")).toBe(false);
+      expect(hasPermission("staff", "categories.create")).toBe(false);
+      expect(hasPermission("staff", "categories.update")).toBe(false);
+      expect(hasPermission("staff", "categories.delete")).toBe(false);
+      expect(hasPermission("staff", "reports.export")).toBe(false);
+      expect(hasPermission("staff", "audit.view")).toBe(false);
       expect(hasPermission("staff", "inventory.adjust_unlimited")).toBe(false);
 
       // Staff allowed capabilities

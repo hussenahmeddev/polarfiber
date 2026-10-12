@@ -11,7 +11,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-try { process.loadEnvFile?.(); } catch {}
+try {
+  process.loadEnvFile?.();
+} catch {}
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,15 +24,15 @@ if (!process.env.MYSQL_HOST || !process.env.MYSQL_PASSWORD || !raw) {
 }
 
 const body = raw.replace(/-----(BEGIN|END) CERTIFICATE-----/g, "").replace(/\s+/g, "");
-const ca   = `-----BEGIN CERTIFICATE-----\n${body.match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
+const ca = `-----BEGIN CERTIFICATE-----\n${body.match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
 
 const c = await mysql.createConnection({
-  host:               process.env.MYSQL_HOST,
-  port:             +(process.env.MYSQL_PORT || 3306),
-  user:               process.env.MYSQL_USER,
-  password:           process.env.MYSQL_PASSWORD,
-  database:           process.env.MYSQL_DATABASE,
-  ssl:              { ca },
+  host: process.env.MYSQL_HOST,
+  port: +(process.env.MYSQL_PORT || 3306),
+  user: process.env.MYSQL_USER,
+  password: process.env.MYSQL_PASSWORD,
+  database: process.env.MYSQL_DATABASE,
+  ssl: { ca },
   multipleStatements: true,
 });
 
