@@ -21,6 +21,7 @@ import {
 import { useStore } from "@/frontend/store";
 import { cn } from "@/frontend/utils";
 import { usePermissions } from "@/frontend/hooks/usePermissions";
+import { ThemeToggle } from "@/frontend/components/ThemeToggle";
 
 export interface NavItemDef {
   id: string;
@@ -192,14 +193,17 @@ export function AdminSidebarLayout({
 
         {/* Sidebar Footer */}
         <div className="space-y-3 border-t border-sidebar-border pt-3">
-          {/* Back to Storefront Link */}
-          <Link
-            to="/"
-            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"
-          >
-            <ArrowLeft className="h-3.5 w-3.5 text-sidebar-foreground/40" />
-            <span>Storefront</span>
-          </Link>
+          {/* Back to Storefront Link & Theme Toggle */}
+          <div className="flex items-center justify-between gap-2 px-1">
+            <Link
+              to="/"
+              className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-xs font-medium text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"
+            >
+              <ArrowLeft className="h-3.5 w-3.5 text-sidebar-foreground/40" />
+              <span>Storefront</span>
+            </Link>
+            <ThemeToggle className="h-8 w-8 rounded-lg border border-sidebar-border bg-sidebar-accent/30 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground" />
+          </div>
 
           {/* User Capsule with Role Badge */}
           <div className="flex items-center justify-between rounded-xl bg-sidebar-accent/30 p-2.5 border border-sidebar-border">

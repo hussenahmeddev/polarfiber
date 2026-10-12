@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { LayoutDashboard, LogOut, Package, ShieldCheck, ShoppingCart, User } from "lucide-react";
 import { Button } from "@/frontend/components/ui/button";
 import { useStore } from "@/frontend/store";
+import { ThemeToggle } from "@/frontend/components/ThemeToggle";
 
 const nav = [
   { to: "/", label: "Home" },
@@ -44,6 +45,7 @@ export function SiteHeader() {
           ))}
         </nav>
         <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
+          <ThemeToggle />
           <Button asChild className="reference-button hidden lg:inline-flex">
             <Link to="/contact">Contact</Link>
           </Button>

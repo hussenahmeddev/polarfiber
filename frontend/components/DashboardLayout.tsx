@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/frontend/utils";
+import { useTheme } from "@/frontend/hooks/useTheme";
 
 export interface NavItem {
   id: string;
@@ -46,25 +47,7 @@ export function DashboardLayout({
 }: DashboardLayoutProps) {
   const { user, logout } = useStore();
   const nav = useNavigate();
-  const [isDark, setIsDark] = React.useState(false);
-
-  React.useEffect(() => {
-    const isDarkMode = document.documentElement.classList.contains("dark");
-    setIsDark(isDarkMode);
-  }, []);
-
-  const toggleTheme = () => {
-    const html = document.documentElement;
-    if (html.classList.contains("dark")) {
-      html.classList.remove("dark");
-      setIsDark(false);
-      localStorage.setItem("polarfiber-theme", "light");
-    } else {
-      html.classList.add("dark");
-      setIsDark(true);
-      localStorage.setItem("polarfiber-theme", "dark");
-    }
-  };
+  const { isDark, toggleTheme } = useTheme();
 
   const handleSignOut = async () => {
     await logout();
