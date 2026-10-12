@@ -1,19 +1,52 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getCookie, deleteCookie, getRequestHeader, getRequestIP } from "@tanstack/react-start/server";
+import {
+  getCookie,
+  deleteCookie,
+  getRequestHeader,
+  getRequestIP,
+} from "@tanstack/react-start/server";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
 import { withDb, rows } from "./db.server";
-import { currentUser, endSession, loadUser, requireAdmin, requirePermission, requireUser, startSession, issueTokenPair, revokeRefreshToken, rotateRefreshToken } from "./session.server";
-import type { Category, Order, OrderStatus, Product, Quote, QuoteStatus, Role, StockAdjustment, ContactMessage, SupportTicket } from "../shared/data";
+import {
+  currentUser,
+  endSession,
+  loadUser,
+  requireAdmin,
+  requirePermission,
+  requireUser,
+  startSession,
+  issueTokenPair,
+  revokeRefreshToken,
+  rotateRefreshToken,
+} from "./session.server";
+import type {
+  Category,
+  Order,
+  OrderStatus,
+  Product,
+  Quote,
+  QuoteStatus,
+  Role,
+  StockAdjustment,
+  ContactMessage,
+  SupportTicket,
+} from "../shared/data";
 import { CATEGORIES, ORDER_STATUSES, QUOTE_STATUSES } from "../shared/data";
 import { getPermissionsForRole } from "../shared/permissions";
 import { notify } from "../utils/notify";
 import { logAction } from "../utils/audit";
 import { changeStock } from "../utils/stock";
+import { encryptSmtpPassword } from "../utils/crypto";
+import { uploadToCloudinary, deleteFromCloudinary } from "../utils/cloudinary";
 
 const PRODUCT_SQL = `SELECT p.product_id,p.name,c.name category,p.capacity,p.price,p.stock,p.image,p.description
   FROM products p JOIN categories c ON c.category_id=p.category_id`;
+
+// PUBLIC_PRODUCT_SQL is the same as PRODUCT_SQL until migrate.sql is run
+// (status/deleted_at/sku/slug columns are added by migration).
+const PUBLIC_PRODUCT_SQL = PRODUCT_SQL;
 
 // ─── IP rate-limiting for login ──────────────────────────────────────────────
 const ipAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -63,7 +96,7 @@ function getUserAgent(): string {
 
 // ---------- catalog ----------
 export const getProducts = createServerFn({ method: "GET" }).handler(async () =>
-  withDb((c) => rows<Product>(c, `${PRODUCT_SQL} ORDER BY p.product_id`)),
+  withDb((c) => rows<Product>(c, `${PUBLIC_PRODUCT_SQL} ORDER BY p.product_id`)),
 );
 
 export const getProduct = createServerFn({ method: "POST" })
@@ -71,9 +104,26 @@ export const getProduct = createServerFn({ method: "POST" })
   .handler(async ({ data }) =>
     withDb(
       async (c) =>
-        (await rows<Product>(c, `${PRODUCT_SQL} WHERE p.product_id=?`, [data.id]))[0] ?? null,
+        (await rows<Product>(c, `${PUBLIC_PRODUCT_SQL} AND p.product_id=?`, [data.id]))[0] ?? null,
     ),
   );
+
+// ---------- product images (served from database BLOBs) ----------
+export const getProductImage = createServerFn({ method: "GET" })
+  .validator((d) => z.object({ id: z.coerce.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    const [rows] = await withDb((c) =>
+      c.execute(
+        "SELECT image_data, mime_type FROM product_images WHERE product_id = ? AND is_primary = 1 LIMIT 1",
+        [data.id],
+      ),
+    );
+    if (!rows[0]) return null;
+    return {
+      data: rows[0].image_data,
+      mimeType: rows[0].mime_type,
+    };
+  });
 
 // ---------- auth ----------
 export const getMe = createServerFn({ method: "GET" }).handler(() => currentUser());
@@ -264,11 +314,9 @@ export const forgotPassword = createServerFn({ method: "POST" })
   .validator((d) => z.object({ email: z.string().email() }).parse(d))
   .handler(async ({ data }) => {
     const found = await withDb((c) =>
-      rows<{ user_id: number }>(
-        c,
-        "SELECT user_id FROM users WHERE email=?",
-        [data.email.toLowerCase()],
-      ),
+      rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
+        data.email.toLowerCase(),
+      ]),
     );
     const userRecord = found[0];
     if (userRecord) {
@@ -290,15 +338,17 @@ export const forgotPassword = createServerFn({ method: "POST" })
 
 export const resetPassword = createServerFn({ method: "POST" })
   .validator((d) =>
-    z.object({
-      token: z.string(),
-      password: z
-        .string()
-        .min(8, "Password must be at least 8 characters")
-        .max(200)
-        .refine((v) => /[a-zA-Z]/.test(v), "Password must contain at least one letter")
-        .refine((v) => /[0-9]/.test(v), "Password must contain at least one number"),
-    }).parse(d),
+    z
+      .object({
+        token: z.string(),
+        password: z
+          .string()
+          .min(8, "Password must be at least 8 characters")
+          .max(200)
+          .refine((v) => /[a-zA-Z]/.test(v), "Password must contain at least one letter")
+          .refine((v) => /[0-9]/.test(v), "Password must contain at least one number"),
+      })
+      .parse(d),
   )
   .handler(async ({ data }) => {
     const tokenHash = createHash("sha256").update(data.token).digest("hex");
@@ -318,7 +368,9 @@ export const resetPassword = createServerFn({ method: "POST" })
         newHash,
         resetRecord.user_id,
       ]);
-      await c.execute("UPDATE password_reset_tokens SET used_at=NOW() WHERE id=?", [resetRecord.id]);
+      await c.execute("UPDATE password_reset_tokens SET used_at=NOW() WHERE id=?", [
+        resetRecord.id,
+      ]);
       await c.execute("DELETE FROM refresh_tokens WHERE user_id=?", [resetRecord.user_id]);
     });
     return { ok: true };
@@ -348,6 +400,45 @@ async function loadOrders(where: string, params: unknown[]): Promise<Order[]> {
     return os.map((o) => ({ ...o, items: items.filter((i) => i.order_id === o.order_id) }));
   });
 }
+
+export const uploadProductImage = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        file: z.string().min(1), // base64 encoded image
+        folder: z.string().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requirePermission("products.update");
+    try {
+      const result = await uploadToCloudinary(data.file, data.folder || "polarfiber/products");
+      return { ok: true, ...result };
+    } catch (err) {
+      console.error("[cloudinary] Upload failed:", err);
+      throw new Error("Failed to upload image to Cloudinary");
+    }
+  });
+
+export const deleteProductImage = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        public_id: z.string().min(1),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requirePermission("products.update");
+    try {
+      await deleteFromCloudinary(data.public_id);
+      return { ok: true };
+    } catch (err) {
+      console.error("[cloudinary] Delete failed:", err);
+      throw new Error("Failed to delete image from Cloudinary");
+    }
+  });
 
 export const placeOrder = createServerFn({ method: "POST" })
   .validator((d) =>
@@ -448,7 +539,7 @@ export const submitQuote = createServerFn({ method: "POST" })
   });
 
 const QUOTE_SQL =
-  "SELECT quote_id,user_id,name,email,subject,message,quoted_amount,valid_until,assigned_to,status,DATE(created_at) created_at FROM quote_requests";
+  "SELECT quote_id,user_id,name,email,phone,subject,message,delivery_location,quoted_amount,valid_until,assigned_to,status,DATE(created_at) created_at FROM quote_requests";
 
 export const getMyAccount = createServerFn({ method: "GET" }).handler(async () => {
   const u = await requireUser();
@@ -614,7 +705,6 @@ export const changeTemporaryPassword = createServerFn({ method: "POST" })
     return { ok: true, user: await loadUser(u.user_id) };
   });
 
-
 // ---------- admin & staff ----------
 export const getAdminData = createServerFn({ method: "GET" }).handler(async () => {
   await requirePermission("dashboard.view");
@@ -654,13 +744,10 @@ export const getAdminOverview = createServerFn({ method: "GET" }).handler(async 
       : (
           await rows<{ revenue: number }>(
             c,
-            "SELECT COALESCE(SUM(total), 0) as revenue FROM orders WHERE status != 'Cancelled'",
+            "SELECT COALESCE(SUM(total), 0) as revenue FROM orders WHERE status = 'Delivered'",
           )
         )[0];
-    const [ordCount] = await rows<{ count: number }>(
-      c,
-      "SELECT COUNT(*) as count FROM orders",
-    );
+    const [ordCount] = await rows<{ count: number }>(c, "SELECT COUNT(*) as count FROM orders");
     const [quoteCount] = await rows<{ count: number }>(
       c,
       "SELECT COUNT(*) as count FROM quote_requests WHERE status = 'New'",
@@ -687,7 +774,7 @@ export const getAdminOverview = createServerFn({ method: "GET" }).handler(async 
           c,
           `SELECT DATE(created_at) as date,
                   COUNT(*) as count,
-                  COALESCE(SUM(CASE WHEN status != 'Cancelled' THEN total ELSE 0 END), 0) as total
+                  COALESCE(SUM(CASE WHEN status = 'Delivered' THEN total ELSE 0 END), 0) as total
            FROM orders
            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
            GROUP BY DATE(created_at)
@@ -749,7 +836,7 @@ export const getAdminOverview = createServerFn({ method: "GET" }).handler(async 
     );
     const lowStockProducts = await rows<Product>(
       c,
-      `${PRODUCT_SQL} WHERE p.stock <= 5 ORDER BY p.stock ASC LIMIT 10`,
+      `${PRODUCT_SQL} AND p.stock <= 5 ORDER BY p.stock ASC LIMIT 10`,
     );
 
     return {
@@ -785,7 +872,8 @@ export const getOrdersPage = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    await requirePermission("orders.view");
+    const actor = await requirePermission("orders.view");
+    const isStaff = actor.role === "staff";
     const page = data.page ?? 1;
     const pageSize = data.pageSize ?? 10;
     const offset = (page - 1) * pageSize;
@@ -862,8 +950,17 @@ export const getOrdersPage = createServerFn({ method: "POST" })
         items: items.filter((i) => i.order_id === o.order_id),
       }));
 
+      // Staff must not see money totals on orders
+      const ordersOut = isStaff
+        ? combinedOrders.map((o) => ({
+            ...o,
+            total: 0,
+            items: o.items.map((it) => ({ ...it, unit_price: 0 })),
+          }))
+        : combinedOrders;
+
       return {
-        orders: combinedOrders,
+        orders: ordersOut,
         total,
         page,
         pageSize,
@@ -909,16 +1006,18 @@ export const getCustomers = createServerFn({ method: "GET" }).handler(async () =
   });
 });
 
-
 const productInput = z.object({
   product_id: z.number().int().min(0),
   name: z.string().trim().min(1).max(150),
+  sku: z.string().trim().max(80).optional().nullable(),
+  slug: z.string().trim().max(200).optional().nullable(),
   category: z.enum(CATEGORIES),
   capacity: z.string().trim().max(40).optional().nullable(),
   price: z.number().positive().max(1e9),
   stock: z.number().int().min(0).max(1e7),
   image: z.string().trim().max(500),
   description: z.string().trim().max(2000),
+  status: z.enum(["active", "draft", "archived"]).default("active"),
 });
 
 export const saveProduct = createServerFn({ method: "POST" })
@@ -954,13 +1053,26 @@ export const saveProduct = createServerFn({ method: "POST" })
           v,
         );
         productId = (r as { insertId: number }).insertId;
+
+        // Auto-generate sku/slug if not supplied
+        const finalSku = (data.sku ?? "").trim() || `PF-${String(productId).padStart(5, "0")}`;
+        const baseSlug =
+          (data.slug ?? "").trim() ||
+          data.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/(^-|-$)/g, "");
+        await c.execute("UPDATE products SET sku=?, slug=?, status=? WHERE product_id=?", [
+          finalSku,
+          baseSlug,
+          data.status ?? "active",
+          productId,
+        ]);
         await logAction(null, "CREATE_PRODUCT", "product", productId, null, data);
       } else {
-        const oldRows = await rows<Product>(
-          c,
-          `${PRODUCT_SQL} WHERE p.product_id=?`,
-          [data.product_id],
-        );
+        const oldRows = await rows<Product>(c, `${PRODUCT_SQL} AND p.product_id=?`, [
+          data.product_id,
+        ]);
         const oldProduct = oldRows[0] ?? null;
         if (!oldProduct) throw new Error("Product not found.");
 
@@ -971,6 +1083,7 @@ export const saveProduct = createServerFn({ method: "POST" })
         }
 
         const effectivePrice = u.role === "staff" ? oldProduct.price : data.price;
+        const effectiveStatus = (data as any).status ?? "active";
         const v = [
           cat.category_id,
           data.name,
@@ -979,9 +1092,10 @@ export const saveProduct = createServerFn({ method: "POST" })
           data.stock,
           data.image,
           data.description,
+          effectiveStatus,
         ];
         await c.execute(
-          "UPDATE products SET category_id=?,name=?,capacity=?,price=?,stock=?,image=?,description=? WHERE product_id=?",
+          "UPDATE products SET category_id=?,name=?,capacity=?,price=?,stock=?,image=?,description=?,status=? WHERE product_id=?",
           [...v, data.product_id],
         );
         // Option A: write a stock_movements record when admin edits the stock field directly
@@ -1013,7 +1127,7 @@ export const deleteProduct = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     await requirePermission("products.delete");
     await withDb(async (c) => {
-      const oldRows = await rows<Product>(c, `${PRODUCT_SQL} WHERE p.product_id=?`, [data.id]);
+      const oldRows = await rows<Product>(c, `${PRODUCT_SQL} AND p.product_id=?`, [data.id]);
       const oldProduct = oldRows[0] ?? null;
       await c.execute("DELETE FROM products WHERE product_id=?", [data.id]);
       await logAction(null, "DELETE_PRODUCT", "product", data.id, oldProduct, null);
@@ -1059,7 +1173,9 @@ export const setOrderStatus = createServerFn({ method: "POST" })
             newStatus === "Cancelled" &&
             (prevStatus === "Out for Delivery" || prevStatus === "Delivered")
           ) {
-            const err = new Error("Staff members cannot cancel orders once out for delivery or delivered.");
+            const err = new Error(
+              "Staff members cannot cancel orders once out for delivery or delivered.",
+            );
             (err as any).statusCode = 403;
             throw err;
           }
@@ -1159,7 +1275,9 @@ export const setOrderStatus = createServerFn({ method: "POST" })
   });
 
 export const addOrderNote = createServerFn({ method: "POST" })
-  .validator((d) => z.object({ order_id: z.number().int(), note: z.string().trim().min(1) }).parse(d))
+  .validator((d) =>
+    z.object({ order_id: z.number().int(), note: z.string().trim().min(1) }).parse(d),
+  )
   .handler(async ({ data }) => {
     const u = await requirePermission("orders.add_note");
     return withDb(async (c) => {
@@ -1174,7 +1292,10 @@ export const addOrderNote = createServerFn({ method: "POST" })
       const newEntry = `[${timestamp} - ${u.name}]: ${data.note}`;
       const combined = ord.internal_notes ? `${ord.internal_notes}\n${newEntry}` : newEntry;
 
-      await c.execute("UPDATE orders SET internal_notes=? WHERE order_id=?", [combined, data.order_id]);
+      await c.execute("UPDATE orders SET internal_notes=? WHERE order_id=?", [
+        combined,
+        data.order_id,
+      ]);
       await c.execute(
         "INSERT INTO order_status_history (order_id, status, notes, changed_by) VALUES (?, 'Note Added', ?, ?)",
         [data.order_id, data.note, u.user_id],
@@ -1250,11 +1371,18 @@ export const setQuoteStatus = createServerFn({ method: "POST" })
           "UPDATE quote_requests SET status='Pending Approval', quoted_amount=?, valid_until=?, assigned_to=? WHERE quote_id=?",
           [amount, data.valid_until || null, u.user_id, data.id],
         );
-        await logAction(null, "REQUEST_QUOTE_APPROVAL", "quote", data.id, { status: prevStatus }, {
-          status: "Pending Approval",
-          quoted_amount: amount,
-          valid_until: data.valid_until,
-        });
+        await logAction(
+          null,
+          "REQUEST_QUOTE_APPROVAL",
+          "quote",
+          data.id,
+          { status: prevStatus },
+          {
+            status: "Pending Approval",
+            quoted_amount: amount,
+            valid_until: data.valid_until,
+          },
+        );
         return {
           ok: true,
           pendingApproval: true,
@@ -1270,9 +1398,11 @@ export const setQuoteStatus = createServerFn({ method: "POST" })
 
       let targetUserId = existing.user_id;
       if (!targetUserId && existing.email) {
-        const userRow = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
-          existing.email.toLowerCase(),
-        ]);
+        const userRow = await rows<{ user_id: number }>(
+          c,
+          "SELECT user_id FROM users WHERE email=?",
+          [existing.email.toLowerCase()],
+        );
         if (userRow[0]) targetUserId = userRow[0].user_id;
       }
 
@@ -1311,7 +1441,9 @@ export const approveQuote = createServerFn({ method: "POST" })
 
       let targetUserId = q.user_id;
       if (!targetUserId && q.email) {
-        const u = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [q.email.toLowerCase()]);
+        const u = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
+          q.email.toLowerCase(),
+        ]);
         if (u[0]) targetUserId = u[0].user_id;
       }
       await notify(
@@ -1321,16 +1453,110 @@ export const approveQuote = createServerFn({ method: "POST" })
         `Your quote request has been approved with quote amount: ETB ${Number(q.quoted_amount).toLocaleString()}.`,
         "/account?tab=quotes",
       );
-      await logAction(null, "APPROVE_QUOTE", "quote", data.id, { status: "Pending Approval" }, { status: "Replied" });
+      await logAction(
+        null,
+        "APPROVE_QUOTE",
+        "quote",
+        data.id,
+        { status: "Pending Approval" },
+        { status: "Replied" },
+      );
       return { ok: true };
     });
   });
 
 export const convertQuoteToOrder = createServerFn({ method: "POST" })
   .validator((d) => z.object({ quote_id: z.number().int() }).parse(d))
-  .handler(async () => {
-    await requireAdmin(); // Staff gets 403!
-    return { ok: true };
+  .handler(async ({ data }) => {
+    const u = await requireAdmin();
+    return withDb(async (c) => {
+      const [q] = await rows<{
+        quote_id: number;
+        user_id: number | null;
+        name: string;
+        email: string;
+        message: string | null;
+        quoted_amount: number | null;
+        delivery_location: string | null;
+        status: string;
+      }>(c, `${QUOTE_SQL} WHERE quote_id=?`, [data.quote_id]);
+      if (!q) throw new Error("Quote not found.");
+      if (!["Replied", "Reviewing", "New"].includes(q.status))
+        throw new Error("Only active quotes (New/Replied/Reviewing) can be converted to orders.");
+      if (!q.quoted_amount || q.quoted_amount <= 0)
+        throw new Error("Quote must have a quoted amount before conversion.");
+
+      // Resolve user_id from email if not set
+      let userId = q.user_id;
+      if (!userId && q.email) {
+        const [ur] = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
+          q.email.toLowerCase(),
+        ]);
+        if (ur) userId = ur.user_id;
+      }
+      if (!userId)
+        throw new Error(
+          "No user account found for this quote. Ask the customer to register first.",
+        );
+
+      await c.beginTransaction();
+      try {
+        const addr = q.delivery_location ?? "See quote details";
+        const [r] = await c.execute(
+          `INSERT INTO orders (user_id, total, status, address, is_paid, payment_method, internal_notes)
+           VALUES (?, ?, 'Pending', ?, 0, 'invoice', ?)`,
+          [
+            userId,
+            q.quoted_amount,
+            addr,
+            `Converted from Quote #${q.quote_id}: ${(q.message ?? "").slice(0, 200)}`,
+          ],
+        );
+        const orderId = (r as { insertId: number }).insertId;
+
+        await c.execute("UPDATE orders SET order_number=? WHERE order_id=?", [
+          `PF-ORD-${orderId}`,
+          orderId,
+        ]);
+
+        await c.execute(
+          `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price)
+           VALUES (?, NULL, ?, 1, ?)`,
+          [orderId, `Quote #${q.quote_id} — ${q.email}`, q.quoted_amount],
+        );
+
+        await c.execute(
+          "INSERT INTO order_status_history (order_id, status, notes, changed_by) VALUES (?, 'Pending', 'Converted from Quote', ?)",
+          [orderId, u.user_id],
+        );
+
+        await c.execute("UPDATE quote_requests SET status='Closed' WHERE quote_id=?", [
+          data.quote_id,
+        ]);
+        await c.commit();
+
+        await notify(
+          userId,
+          "order_created",
+          `Order #${orderId} Created from Your Quote`,
+          `Your quote #${q.quote_id} has been converted to Order #${orderId}.`,
+          "/account?tab=orders",
+        );
+        await logAction(
+          null,
+          "CONVERT_QUOTE_TO_ORDER",
+          "quote",
+          data.quote_id,
+          { status: q.status },
+          { order_id: orderId, status: "Closed" },
+        );
+
+        return { ok: true, order_id: orderId };
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
+    });
   });
 
 export const updateProductStock = createServerFn({ method: "POST" })
@@ -1340,7 +1566,10 @@ export const updateProductStock = createServerFn({ method: "POST" })
         id: z.number().int(),
         stock: z.number().int().min(0).optional(),
         delta: z.number().int().optional(),
-        reason: z.string().trim().min(1, "A mandatory reason must be provided for stock adjustments."),
+        reason: z
+          .string()
+          .trim()
+          .min(1, "A mandatory reason must be provided for stock adjustments."),
       })
       .refine((v) => v.stock !== undefined || v.delta !== undefined, {
         message: "Either stock or delta must be provided.",
@@ -1454,9 +1683,11 @@ export const approveStockAdjustment = createServerFn({ method: "POST" })
         if (!adj) throw new Error("Adjustment not found.");
         if (adj.status !== "pending_approval") throw new Error("Adjustment already reviewed.");
 
-        const [prod] = await rows<{ stock: number }>(c, "SELECT stock FROM products WHERE product_id=? FOR UPDATE", [
-          adj.product_id,
-        ]);
+        const [prod] = await rows<{ stock: number }>(
+          c,
+          "SELECT stock FROM products WHERE product_id=? FOR UPDATE",
+          [adj.product_id],
+        );
         if (!prod) throw new Error("Product not found.");
 
         // changeStock() re-locks under FOR UPDATE and throws if the result
@@ -1464,16 +1695,16 @@ export const approveStockAdjustment = createServerFn({ method: "POST" })
         await changeStock(
           c,
           adj.product_id,
-          adj.quantity,          // signed: positive = restock, negative = write-down
+          adj.quantity, // signed: positive = restock, negative = write-down
           `Stock adjustment #${data.id} approved`,
           "manual",
           data.id,
           admin.user_id,
         );
-        await c.execute("UPDATE stock_adjustments SET status='approved', reviewed_by=?, reviewed_at=NOW() WHERE id=?", [
-          admin.user_id,
-          data.id,
-        ]);
+        await c.execute(
+          "UPDATE stock_adjustments SET status='approved', reviewed_by=?, reviewed_at=NOW() WHERE id=?",
+          [admin.user_id, data.id],
+        );
         await c.commit();
 
         await notify(
@@ -1483,7 +1714,14 @@ export const approveStockAdjustment = createServerFn({ method: "POST" })
           `Your stock adjustment request (#${data.id}) for product ID ${adj.product_id} has been approved.`,
           "/admin",
         );
-        await logAction(null, "APPROVE_STOCK_ADJUSTMENT", "stock_adjustment", data.id, { status: "pending_approval" }, { status: "approved" });
+        await logAction(
+          null,
+          "APPROVE_STOCK_ADJUSTMENT",
+          "stock_adjustment",
+          data.id,
+          { status: "pending_approval" },
+          { status: "approved" },
+        );
         return { ok: true };
       } catch (e) {
         await c.rollback().catch(() => {});
@@ -1497,18 +1735,16 @@ export const rejectStockAdjustment = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const admin = await requireAdmin();
     return withDb(async (c) => {
-      const [adj] = await rows<StockAdjustment>(
-        c,
-        "SELECT * FROM stock_adjustments WHERE id=?",
-        [data.id],
-      );
+      const [adj] = await rows<StockAdjustment>(c, "SELECT * FROM stock_adjustments WHERE id=?", [
+        data.id,
+      ]);
       if (!adj) throw new Error("Adjustment not found.");
       if (adj.status !== "pending_approval") throw new Error("Adjustment already reviewed.");
 
-      await c.execute("UPDATE stock_adjustments SET status='rejected', reviewed_by=?, reviewed_at=NOW() WHERE id=?", [
-        admin.user_id,
-        data.id,
-      ]);
+      await c.execute(
+        "UPDATE stock_adjustments SET status='rejected', reviewed_by=?, reviewed_at=NOW() WHERE id=?",
+        [admin.user_id, data.id],
+      );
       await notify(
         adj.staff_id,
         "stock_rejection",
@@ -1516,7 +1752,14 @@ export const rejectStockAdjustment = createServerFn({ method: "POST" })
         `Your stock adjustment request (#${data.id}) was rejected.${data.reason ? ` Reason: ${data.reason}` : ""}`,
         "/admin",
       );
-      await logAction(null, "REJECT_STOCK_ADJUSTMENT", "stock_adjustment", data.id, { status: "pending_approval" }, { status: "rejected" });
+      await logAction(
+        null,
+        "REJECT_STOCK_ADJUSTMENT",
+        "stock_adjustment",
+        data.id,
+        { status: "pending_approval" },
+        { status: "rejected" },
+      );
       return { ok: true };
     });
   });
@@ -1541,27 +1784,73 @@ export const getMyNotifications = createServerFn({ method: "GET" }).handler(asyn
   );
 });
 
-export const getAuditLogs = createServerFn({ method: "GET" }).handler(async () => {
-  // audit.view is NOT in STAFF_PERMISSIONS — staff gets 403 here.
-  await requirePermission("audit.view");
-  return withDb((c) =>
-    rows<{
-      id: number;
-      actor_id: number | null;
-      actor_name: string | null;
-      ip_address: string | null;
-      action: string;
-      entity_type: string;
-      entity_id: string;
-      old_values: string | null;
-      new_values: string | null;
-      created_at: string;
-    }>(
-      c,
-      "SELECT id, actor_id, actor_name, ip_address, action, entity_type, entity_id, CAST(old_values AS CHAR) old_values, CAST(new_values AS CHAR) new_values, created_at FROM audit_logs ORDER BY id DESC LIMIT 100",
-    ),
-  );
-});
+export const getAuditLogs = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+        actor: z.string().optional(),
+        action: z.string().optional(),
+        entityType: z.string().optional(),
+        page: z.number().int().min(1).default(1),
+        limit: z.number().int().min(1).max(200).default(50),
+      })
+      .parse(d ?? {}),
+  )
+  .handler(async ({ data }) => {
+    await requirePermission("audit.view");
+    return withDb(async (c) => {
+      const where: string[] = [];
+      const params: unknown[] = [];
+      if (data.startDate) {
+        where.push("DATE(created_at) >= ?");
+        params.push(data.startDate);
+      }
+      if (data.endDate) {
+        where.push("DATE(created_at) <= ?");
+        params.push(data.endDate);
+      }
+      if (data.actor) {
+        where.push("actor_name LIKE ?");
+        params.push(`%${data.actor}%`);
+      }
+      if (data.action) {
+        where.push("action = ?");
+        params.push(data.action);
+      }
+      if (data.entityType) {
+        where.push("entity_type = ?");
+        params.push(data.entityType);
+      }
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const offset = (data.page - 1) * data.limit;
+      const [cnt] = await rows<{ total: number }>(
+        c,
+        `SELECT COUNT(*) total FROM audit_logs ${whereSql}`,
+        params,
+      );
+      const logs = await rows<{
+        id: number;
+        actor_id: number | null;
+        actor_name: string | null;
+        ip_address: string | null;
+        action: string;
+        entity_type: string;
+        entity_id: string;
+        old_values: string | null;
+        new_values: string | null;
+        created_at: string;
+      }>(
+        c,
+        `SELECT id, actor_id, actor_name, ip_address, action, entity_type, entity_id,
+                CAST(old_values AS CHAR) old_values, CAST(new_values AS CHAR) new_values, created_at
+         FROM audit_logs ${whereSql} ORDER BY id DESC LIMIT ${data.limit} OFFSET ${offset}`,
+        params,
+      );
+      return { logs, total: Number(cnt?.total ?? 0), page: data.page, limit: data.limit };
+    });
+  });
 
 export const getContactMessages = createServerFn({ method: "GET" }).handler(async () => {
   await requirePermission("messages.view");
@@ -1593,9 +1882,11 @@ export const replyContactMessage = createServerFn({ method: "POST" })
           [data.message_id, u.user_id, data.message],
         );
       }
-      const [target] = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
-        data.email.toLowerCase(),
-      ]);
+      const [target] = await rows<{ user_id: number }>(
+        c,
+        "SELECT user_id FROM users WHERE email=?",
+        [data.email.toLowerCase()],
+      );
       if (target) {
         await notify(
           target.user_id,
@@ -1605,10 +1896,17 @@ export const replyContactMessage = createServerFn({ method: "POST" })
           "/account?tab=support",
         );
       }
-      await logAction(null, "REPLY_MESSAGE", "message", data.message_id ?? data.quote_id ?? data.email, null, {
-        email: data.email,
-        message: data.message,
-      });
+      await logAction(
+        null,
+        "REPLY_MESSAGE",
+        "message",
+        data.message_id ?? data.quote_id ?? data.email,
+        null,
+        {
+          email: data.email,
+          message: data.message,
+        },
+      );
     });
     return { ok: true };
   });
@@ -1670,7 +1968,9 @@ export const assignSupportTicket = createServerFn({ method: "POST" })
       if (u.role === "staff") {
         // Staff cannot reassign a ticket already assigned to another staff member
         if (ticket.assigned_to && ticket.assigned_to !== u.user_id) {
-          const err = new Error("Cannot reassign a support ticket already assigned to another staff member.");
+          const err = new Error(
+            "Cannot reassign a support ticket already assigned to another staff member.",
+          );
           (err as any).statusCode = 403;
           throw err;
         }
@@ -1703,21 +2003,27 @@ export const updateSupportTicketStatus = createServerFn({ method: "POST" })
     z
       .object({
         ticket_id: z.number().int(),
-        status: z.enum(["Open", "In Progress", "Resolved"]),
+        status: z.enum(["Open", "In Progress", "Resolved", "Closed"]),
       })
       .parse(d),
   )
   .handler(async ({ data }) => {
     await requirePermission("support.update_status");
     return withDb(async (c) => {
-      const [ticket] = await rows<{ id: number; status: string; customer_email: string; user_id: number | null }>(
-        c,
-        "SELECT id, status, customer_email, user_id FROM support_tickets WHERE id=?",
-        [data.ticket_id],
-      );
+      const [ticket] = await rows<{
+        id: number;
+        status: string;
+        customer_email: string;
+        user_id: number | null;
+      }>(c, "SELECT id, status, customer_email, user_id FROM support_tickets WHERE id=?", [
+        data.ticket_id,
+      ]);
       if (!ticket) throw new Error("Support ticket not found.");
 
-      await c.execute("UPDATE support_tickets SET status=? WHERE id=?", [data.status, data.ticket_id]);
+      await c.execute("UPDATE support_tickets SET status=? WHERE id=?", [
+        data.status,
+        data.ticket_id,
+      ]);
       if (ticket.user_id) {
         await notify(
           ticket.user_id,
@@ -1747,6 +2053,7 @@ export const replySupportTicket = createServerFn({ method: "POST" })
         user_id: z.number().int().optional(),
         customer_email: z.string().email().optional(),
         reply: z.string().min(1),
+        is_internal: z.boolean().default(false),
       })
       .parse(d),
   )
@@ -1756,35 +2063,41 @@ export const replySupportTicket = createServerFn({ method: "POST" })
       const tId = Number(data.ticket_id);
       if (!Number.isNaN(tId) && tId > 0) {
         await c.execute(
-          "INSERT INTO ticket_replies (ticket_id, user_id, message) VALUES (?, ?, ?)",
-          [tId, u.user_id, data.reply],
+          "INSERT INTO ticket_replies (ticket_id, user_id, message, is_internal) VALUES (?, ?, ?, ?)",
+          [tId, u.user_id, data.reply, data.is_internal ? 1 : 0],
         );
       }
-      let targetUserId = data.user_id;
-      if (!targetUserId && data.customer_email) {
-        const [target] = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
-          data.customer_email.toLowerCase(),
-        ]);
-        if (target) targetUserId = target.user_id;
-      }
-      if (targetUserId) {
-        await notify(
-          targetUserId,
-          "ticket_reply",
-          `Reply on Ticket #${data.ticket_id}`,
-          data.reply,
-          "/account?tab=support",
-        );
+      // Only notify customer for public replies
+      if (!data.is_internal) {
+        let targetUserId = data.user_id;
+        if (!targetUserId && data.customer_email) {
+          const [target] = await rows<{ user_id: number }>(
+            c,
+            "SELECT user_id FROM users WHERE email=?",
+            [data.customer_email.toLowerCase()],
+          );
+          if (target) targetUserId = target.user_id;
+        }
+        if (targetUserId) {
+          await notify(
+            targetUserId,
+            "ticket_reply",
+            `Reply on Ticket #${data.ticket_id}`,
+            data.reply,
+            "/account?tab=support",
+          );
+        }
       }
       await logAction(null, "REPLY_SUPPORT_TICKET", "ticket", data.ticket_id, null, {
         reply: data.reply,
+        is_internal: data.is_internal,
       });
     });
     return { ok: true };
   });
 
 export const getCompanySettings = createServerFn({ method: "GET" }).handler(async () => {
-  await requireAdmin(); // Staff gets 403!
+  await requirePermission("settings.view");
   return withDb((c) =>
     rows<{ setting_key: string; setting_value: string; description: string | null }>(
       c,
@@ -1798,21 +2111,61 @@ export const updateCompanySetting = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     await requireAdmin(); // Staff gets 403!
     return withDb(async (c) => {
+      let valueToStore = data.value;
+      if (data.key === "smtp_password") {
+        valueToStore = encryptSmtpPassword(data.value);
+      }
       await c.execute(
         "INSERT INTO app_settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value=?",
-        [data.key, data.value, data.value],
+        [data.key, valueToStore, valueToStore],
       );
-      await logAction(null, "UPDATE_SETTING", "setting", data.key, null, { value: data.value });
+      await logAction(null, "UPDATE_SETTING", "setting", data.key, null, {
+        value: data.key === "smtp_password" ? "[ENCRYPTED]" : data.value,
+      });
+      return { ok: true };
+    });
+  });
+
+export const changePassword = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        currentPassword: z.string().min(1),
+        newPassword: z.string().min(8),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser();
+    return withDb(async (c) => {
+      const [dbUser] = await rows<{ password_hash: string }>(
+        c,
+        "SELECT password_hash FROM users WHERE user_id=?",
+        [user.user_id],
+      );
+      if (!dbUser) throw new Error("User not found");
+
+      const valid = await bcrypt.compare(data.currentPassword, dbUser.password_hash);
+      if (!valid) {
+        throw Object.assign(new Error("Current password is incorrect"), { status: 400 });
+      }
+
+      const newHash = await bcrypt.hash(data.newPassword, 12);
+      await c.execute("UPDATE users SET password_hash=? WHERE user_id=?", [newHash, user.user_id]);
+
+      await logAction(null, "CHANGE_PASSWORD", "user", user.user_id, null, null);
       return { ok: true };
     });
   });
 
 export const updateUserRole = createServerFn({ method: "POST" })
   .validator((d) =>
-    z.object({
-      userId: z.number().int().positive(),
-      role: z.enum(["customer", "admin", "staff"]),
-    }).parse(d),
+    z
+      .object({
+        userId: z.number().int().positive(),
+        role: z.enum(["customer", "admin", "staff"]),
+      })
+      .parse(d),
   )
   .handler(async ({ data }) => {
     const actor = await requireAdmin();
@@ -1889,7 +2242,10 @@ export const createTeamMember = createServerFn({ method: "POST" })
         name: z.string().trim().min(1, "Name is required").max(100),
         email: z.string().trim().email("Valid email required").max(255),
         phone: z.string().trim().max(20).default(""),
-        temporaryPassword: z.string().min(8, "Temporary password must be at least 8 characters").max(200),
+        temporaryPassword: z
+          .string()
+          .min(8, "Temporary password must be at least 8 characters")
+          .max(200),
         role: z.enum(["staff", "admin"]).default("staff"),
       })
       .parse(d),
@@ -1898,7 +2254,11 @@ export const createTeamMember = createServerFn({ method: "POST" })
     await requireAdmin();
     return withDb(async (c) => {
       const email = data.email.toLowerCase();
-      const existing = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [email]);
+      const existing = await rows<{ user_id: number }>(
+        c,
+        "SELECT user_id FROM users WHERE email=?",
+        [email],
+      );
       if (existing.length > 0) throw new Error("A user with this email already exists.");
 
       const hash = await bcrypt.hash(data.temporaryPassword, 12);
@@ -1921,14 +2281,12 @@ export const createTeamMember = createServerFn({ method: "POST" })
         "/admin",
       );
 
-      await logAction(
-        null,
-        "CREATE_TEAM_MEMBER",
-        "user",
-        newUserId,
-        null,
-        { name: data.name, email, role: data.role, must_change_password: true },
-      );
+      await logAction(null, "CREATE_TEAM_MEMBER", "user", newUserId, null, {
+        name: data.name,
+        email,
+        role: data.role,
+        must_change_password: true,
+      });
 
       return {
         ok: true,
@@ -1969,4 +2327,1410 @@ export const logExportAction = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+// =============================================================================
+// ADMIN CONSOLE — Phase 3 additions
+// =============================================================================
 
+// ─── Categories CRUD ────────────────────────────────────────────────────────
+
+export const getCategories = createServerFn({ method: "GET" }).handler(async () => {
+  await requirePermission("categories.view");
+  return withDb((c) =>
+    rows<{
+      category_id: number;
+      name: string;
+      slug: string;
+      description: string | null;
+      parent_id: number | null;
+      parent_name: string | null;
+      sort_order: number;
+      product_count: number;
+      created_at: string;
+    }>(
+      c,
+      `SELECT c.category_id, c.name, c.slug, c.description,
+              c.parent_id, p.name parent_name, COALESCE(c.sort_order,0) sort_order,
+              (SELECT COUNT(*) FROM products pr
+               WHERE pr.category_id = c.category_id
+                 AND (pr.deleted_at IS NULL OR pr.deleted_at = '0000-00-00 00:00:00')) product_count,
+              DATE(c.created_at) created_at
+       FROM categories c
+       LEFT JOIN categories p ON p.category_id = c.parent_id
+       ORDER BY c.sort_order ASC, c.name ASC`,
+    ),
+  );
+});
+
+export const saveCategory = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        category_id: z.number().int().min(0),
+        name: z.string().trim().min(1).max(100),
+        slug: z
+          .string()
+          .trim()
+          .min(1)
+          .max(100)
+          .regex(/^[a-z0-9-]+$/, "Slug must be lowercase letters, numbers, and hyphens only"),
+        description: z.string().trim().max(500).nullable().optional(),
+        parent_id: z.number().int().nullable().optional(),
+        sort_order: z.number().int().min(0).max(9999).default(0),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    return withDb(async (c) => {
+      if (data.category_id === 0) {
+        const nameDup = await rows(c, "SELECT 1 FROM categories WHERE name=?", [data.name]);
+        if (nameDup.length) throw new Error("A category with this name already exists.");
+        const slugDup = await rows(c, "SELECT 1 FROM categories WHERE slug=?", [data.slug]);
+        if (slugDup.length) throw new Error("A category with this slug already exists.");
+        const [r] = await c.execute(
+          "INSERT INTO categories (name, slug, description, parent_id, sort_order) VALUES (?,?,?,?,?)",
+          [data.name, data.slug, data.description ?? null, data.parent_id ?? null, data.sort_order],
+        );
+        const id = (r as { insertId: number }).insertId;
+        await logAction(null, "CREATE_CATEGORY", "category", id, null, data);
+        return { ok: true, category_id: id };
+      } else {
+        const [old] = await rows<{ name: string; slug: string }>(
+          c,
+          "SELECT name, slug FROM categories WHERE category_id=?",
+          [data.category_id],
+        );
+        if (!old) throw new Error("Category not found.");
+        if (old.name !== data.name) {
+          const dup = await rows(c, "SELECT 1 FROM categories WHERE name=? AND category_id!=?", [
+            data.name,
+            data.category_id,
+          ]);
+          if (dup.length) throw new Error("A category with this name already exists.");
+        }
+        if (old.slug !== data.slug) {
+          const dup = await rows(c, "SELECT 1 FROM categories WHERE slug=? AND category_id!=?", [
+            data.slug,
+            data.category_id,
+          ]);
+          if (dup.length) throw new Error("A category with this slug already exists.");
+        }
+        await c.execute(
+          "UPDATE categories SET name=?, slug=?, description=?, parent_id=?, sort_order=? WHERE category_id=?",
+          [
+            data.name,
+            data.slug,
+            data.description ?? null,
+            data.parent_id ?? null,
+            data.sort_order,
+            data.category_id,
+          ],
+        );
+        await logAction(null, "UPDATE_CATEGORY", "category", data.category_id, old, data);
+        return { ok: true, category_id: data.category_id };
+      }
+    });
+  });
+
+export const deleteCategory = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    return withDb(async (c) => {
+      const [cnt] = await rows<{ count: number }>(
+        c,
+        "SELECT COUNT(*) count FROM products WHERE category_id=? AND (deleted_at IS NULL OR deleted_at='0000-00-00 00:00:00')",
+        [data.id],
+      );
+      if ((cnt?.count ?? 0) > 0)
+        throw new Error(
+          "Cannot delete a category that has active products. Reassign or archive them first.",
+        );
+      const [old] = await rows(c, "SELECT name FROM categories WHERE category_id=?", [data.id]);
+      await c.execute("DELETE FROM categories WHERE category_id=?", [data.id]);
+      await logAction(null, "DELETE_CATEGORY", "category", data.id, old, null);
+      return { ok: true };
+    });
+  });
+
+export const reorderCategories = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        items: z
+          .array(z.object({ category_id: z.number().int(), sort_order: z.number().int() }))
+          .min(1),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requireAdmin();
+    return withDb(async (c) => {
+      for (const item of data.items) {
+        await c.execute("UPDATE categories SET sort_order=? WHERE category_id=?", [
+          item.sort_order,
+          item.category_id,
+        ]);
+      }
+      return { ok: true };
+    });
+  });
+
+// ─── Inventory: stock movement history ───────────────────────────────────────
+
+export const getStockMovements = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        product_id: z.number().int(),
+        page: z.number().int().min(1).default(1),
+        limit: z.number().int().min(1).max(200).default(50),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requirePermission("inventory.view");
+    return withDb(async (c) => {
+      const offset = (data.page - 1) * data.limit;
+      const [cnt] = await rows<{ total: number }>(
+        c,
+        "SELECT COUNT(*) total FROM stock_movements WHERE product_id=?",
+        [data.product_id],
+      );
+      const movements = await rows<{
+        id: number;
+        product_id: number;
+        product_name: string;
+        quantity: number;
+        type: string;
+        reference_type: string;
+        reference_id: string;
+        note: string | null;
+        created_at: string;
+      }>(
+        c,
+        `SELECT sm.id, sm.product_id, p.name product_name, sm.quantity, sm.type,
+                sm.reference_type, CAST(sm.reference_id AS CHAR) reference_id,
+                sm.note, sm.created_at
+         FROM stock_movements sm
+         JOIN products p ON p.product_id = sm.product_id
+         WHERE sm.product_id=?
+         ORDER BY sm.id DESC
+         LIMIT ${data.limit} OFFSET ${offset}`,
+        [data.product_id],
+      );
+      return { movements, total: Number(cnt?.total ?? 0), page: data.page, limit: data.limit };
+    });
+  });
+
+// ─── Quotes: expire overdue ───────────────────────────────────────────────────
+
+export const expireQuotes = createServerFn({ method: "POST" }).handler(async () => {
+  await requireAdmin();
+  return withDb(async (c) => {
+    const [r] = await c.execute(
+      `UPDATE quote_requests
+       SET status='Closed'
+       WHERE valid_until IS NOT NULL
+         AND valid_until < CURDATE()
+         AND status NOT IN ('Closed', 'Cancelled')`,
+    );
+    const affected = (r as { affectedRows: number }).affectedRows;
+    await logAction(null, "EXPIRE_QUOTES", "quote", "batch", null, { expired: affected });
+    return { ok: true, expired: affected };
+  });
+});
+
+// ─── Orders: mark paid ────────────────────────────────────────────────────────
+
+export const markOrderPaid = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        order_id: z.number().int(),
+        payment_method: z.string().trim().min(1).max(80),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requirePermission("orders.mark_paid");
+    return withDb(async (c) => {
+      const [order] = await rows<{
+        order_id: number;
+        status: string;
+        user_id: number;
+        is_paid: number;
+      }>(c, "SELECT order_id, status, user_id, is_paid FROM orders WHERE order_id=?", [
+        data.order_id,
+      ]);
+      if (!order) throw new Error("Order not found.");
+      if (order.is_paid) throw new Error("Order is already marked as paid.");
+
+      await c.execute(
+        "UPDATE orders SET is_paid=1, payment_method=?, payment_status='paid' WHERE order_id=?",
+        [data.payment_method, data.order_id],
+      );
+      await c.execute(
+        "INSERT INTO order_status_history (order_id, status, notes, changed_by) VALUES (?, ?, ?, ?)",
+        [data.order_id, order.status, `Marked as paid — method: ${data.payment_method}`, u.user_id],
+      );
+      await notify(
+        order.user_id,
+        "order_paid",
+        `Order #${data.order_id} Payment Confirmed`,
+        `Your payment for Order #${data.order_id} has been confirmed.`,
+        "/account?tab=orders",
+      );
+      await logAction(
+        null,
+        "MARK_ORDER_PAID",
+        "order",
+        data.order_id,
+        { is_paid: 0 },
+        { is_paid: 1, payment_method: data.payment_method },
+      );
+      return { ok: true };
+    });
+  });
+
+// ─── Customers: block/unblock, detail, CSV export ────────────────────────────
+
+export const blockCustomer = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ user_id: z.number().int(), block: z.boolean() }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("customers.block");
+    return withDb(async (c) => {
+      const [target] = await rows<{ user_id: number; name: string; is_active: number }>(
+        c,
+        "SELECT user_id, name, is_active FROM users WHERE user_id=?",
+        [data.user_id],
+      );
+      if (!target) throw new Error("User not found.");
+      await c.execute("UPDATE users SET is_active=? WHERE user_id=?", [
+        data.block ? 0 : 1,
+        data.user_id,
+      ]);
+      await logAction(
+        null,
+        data.block ? "BLOCK_CUSTOMER" : "UNBLOCK_CUSTOMER",
+        "user",
+        data.user_id,
+        { is_active: target.is_active },
+        { is_active: data.block ? 0 : 1 },
+      );
+      return { ok: true };
+    });
+  });
+
+export const getCustomerDetail = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ user_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    const actor = await requirePermission("customers.view");
+    const isStaff = actor.role === "staff";
+    return withDb(async (c) => {
+      const [u] = await rows<{
+        user_id: number;
+        name: string;
+        email: string;
+        phone: string;
+        role: string;
+        is_active: number;
+        created_at: string;
+      }>(
+        c,
+        "SELECT user_id,name,email,phone,role,is_active,DATE(created_at) created_at FROM users WHERE user_id=?",
+        [data.user_id],
+      );
+      if (!u) throw new Error("Customer not found.");
+      const [stats] = await rows<{ orders_count: number; total_spent: number }>(
+        c,
+        `SELECT COUNT(*) orders_count,
+                COALESCE(SUM(CASE WHEN status!='Cancelled' THEN total ELSE 0 END),0) total_spent
+         FROM orders WHERE user_id=?`,
+        [data.user_id],
+      );
+      const recentOrders = await loadOrders("WHERE o.user_id=? ORDER BY o.order_id DESC LIMIT 10", [
+        data.user_id,
+      ]);
+      return {
+        ...u,
+        orders_count: Number(stats?.orders_count ?? 0),
+        total_spent: isStaff ? 0 : Number(stats?.total_spent ?? 0),
+        recent_orders: isStaff
+          ? recentOrders.map((o) => ({
+              ...o,
+              total: 0,
+              items: o.items.map((it) => ({ ...it, unit_price: 0 })),
+            }))
+          : recentOrders,
+      };
+    });
+  });
+
+export const exportCustomersCSV = createServerFn({ method: "GET" }).handler(async () => {
+  const actor = await requirePermission("customers.export");
+  const data = await withDb((c) =>
+    rows<{
+      user_id: number;
+      name: string;
+      email: string;
+      phone: string;
+      role: string;
+      is_active: number;
+      orders_count: number;
+      total_spent: number;
+      created_at: string;
+    }>(
+      c,
+      `SELECT u.user_id, u.name, u.email, COALESCE(u.phone,'') phone,
+              COALESCE((SELECT r.role FROM user_roles r WHERE r.user_id=u.user_id LIMIT 1), u.role) role,
+              u.is_active,
+              (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.user_id) orders_count,
+              COALESCE((SELECT SUM(total) FROM orders o WHERE o.user_id=u.user_id AND o.status!='Cancelled'),0) total_spent,
+              DATE(u.created_at) created_at
+       FROM users u ORDER BY u.user_id`,
+    ),
+  );
+  const header = "ID,Name,Email,Phone,Role,Active,Orders,Total Spent,Joined\n";
+  const csvRows = data
+    .map(
+      (r) =>
+        `${r.user_id},"${r.name.replace(/"/g, '""')}","${r.email}","${r.phone}","${r.role}",${r.is_active},${r.orders_count},${r.total_spent},"${r.created_at}"`,
+    )
+    .join("\n");
+  await logAction(null, "EXPORT_CUSTOMERS_CSV", "customers", "csv", null, {
+    exported_by: actor.name,
+    count: data.length,
+  });
+  return { csv: header + csvRows, count: data.length };
+});
+
+// ─── Messages: mark read ──────────────────────────────────────────────────────
+
+export const markMessageRead = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("messages.view");
+    await withDb((c) => c.execute("UPDATE contact_messages SET is_read=1 WHERE id=?", [data.id]));
+    return { ok: true };
+  });
+
+// ─── Support: ticket replies + create ticket ──────────────────────────────────
+
+export const getSupportTicketReplies = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ ticket_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("support.view");
+    return withDb((c) =>
+      rows<{
+        id: number;
+        ticket_id: number;
+        user_id: number | null;
+        sender_name: string | null;
+        message: string;
+        is_internal: number;
+        created_at: string;
+      }>(
+        c,
+        `SELECT tr.id, tr.ticket_id, tr.user_id, u.name sender_name,
+                tr.message, tr.is_internal, tr.created_at
+         FROM ticket_replies tr
+         LEFT JOIN users u ON u.user_id = tr.user_id
+         WHERE tr.ticket_id=?
+         ORDER BY tr.id ASC`,
+        [data.ticket_id],
+      ),
+    );
+  });
+
+export const createSupportTicket = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        customer_name: z.string().trim().min(1).max(100),
+        customer_email: z.string().trim().email().max(255),
+        subject: z.string().trim().min(1).max(200),
+        category: z.enum([
+          "Technical Specs",
+          "Installation",
+          "Warranty",
+          "Custom Fabrication",
+          "General",
+          "Billing",
+        ]),
+        priority: z.enum(["Low", "Normal", "High", "Urgent"]),
+        message: z.string().trim().max(2000).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requirePermission("support.view");
+    return withDb(async (c) => {
+      const [usr] = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
+        data.customer_email.toLowerCase(),
+      ]);
+      const [r] = await c.execute(
+        `INSERT INTO support_tickets
+           (ticket_code, user_id, customer_name, customer_email, subject, category, priority, assigned_to)
+         VALUES (CONCAT('TCK-', FLOOR(1000 + RAND()*9000)), ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          usr?.user_id ?? null,
+          data.customer_name,
+          data.customer_email,
+          data.subject,
+          data.category,
+          data.priority,
+          u.user_id,
+        ],
+      );
+      const ticketId = (r as { insertId: number }).insertId;
+      if (data.message) {
+        await c.execute(
+          "INSERT INTO ticket_replies (ticket_id, user_id, message, is_internal) VALUES (?,?,?,0)",
+          [ticketId, u.user_id, data.message],
+        );
+      }
+      await logAction(null, "CREATE_SUPPORT_TICKET", "support_ticket", ticketId, null, data);
+      return { ok: true, ticket_id: ticketId };
+    });
+  });
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+
+export const getSalesReport = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ startDate: z.string().trim(), endDate: z.string().trim() }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("reports.view");
+    return withDb(async (c) => {
+      const { startDate: sd, endDate: ed } = data;
+
+      const [summary] = await rows<{
+        total_orders: number;
+        total_revenue: number;
+        delivered_orders: number;
+        delivered_revenue: number;
+      }>(
+        c,
+        `SELECT COUNT(*) total_orders,
+                COALESCE(SUM(total),0) total_revenue,
+                SUM(CASE WHEN status='Delivered' THEN 1 ELSE 0 END) delivered_orders,
+                COALESCE(SUM(CASE WHEN status='Delivered' THEN total ELSE 0 END),0) delivered_revenue
+         FROM orders WHERE DATE(created_at) BETWEEN ? AND ?`,
+        [sd, ed],
+      );
+
+      const daily = await rows<{ date: string; orders: number; revenue: number }>(
+        c,
+        `SELECT DATE(created_at) date, COUNT(*) orders,
+                COALESCE(SUM(CASE WHEN status='Delivered' THEN total ELSE 0 END),0) revenue
+         FROM orders WHERE DATE(created_at) BETWEEN ? AND ?
+         GROUP BY DATE(created_at) ORDER BY date ASC`,
+        [sd, ed],
+      );
+
+      const top_products = await rows<{ product_name: string; qty: number; revenue: number }>(
+        c,
+        `SELECT oi.product_name, SUM(oi.quantity) qty, SUM(oi.quantity * oi.unit_price) revenue
+         FROM order_items oi
+         JOIN orders o ON o.order_id = oi.order_id
+         WHERE o.status='Delivered' AND DATE(o.created_at) BETWEEN ? AND ?
+         GROUP BY oi.product_name ORDER BY revenue DESC LIMIT 10`,
+        [sd, ed],
+      );
+
+      const by_status = await rows<{ status: string; count: number; revenue: number }>(
+        c,
+        `SELECT status, COUNT(*) count, COALESCE(SUM(total),0) revenue
+         FROM orders WHERE DATE(created_at) BETWEEN ? AND ?
+         GROUP BY status`,
+        [sd, ed],
+      );
+
+      const by_category = await rows<{ category: string; revenue: number; count: number }>(
+        c,
+        `SELECT c.name category, COALESCE(SUM(oi.quantity * oi.unit_price),0) revenue, COUNT(DISTINCT o.order_id) count
+         FROM order_items oi
+         JOIN orders o ON o.order_id = oi.order_id
+         JOIN products pr ON pr.product_id = oi.product_id
+         JOIN categories c ON c.category_id = pr.category_id
+         WHERE o.status='Delivered' AND DATE(o.created_at) BETWEEN ? AND ?
+         GROUP BY c.category_id ORDER BY revenue DESC`,
+        [sd, ed],
+      );
+
+      const [quotes] = await rows<{ total: number; accepted: number; converted: number }>(
+        c,
+        `SELECT COUNT(*) total,
+                SUM(CASE WHEN status='Accepted' THEN 1 ELSE 0 END) accepted,
+                SUM(CASE WHEN status='Closed' THEN 1 ELSE 0 END) converted
+         FROM quote_requests WHERE DATE(created_at) BETWEEN ? AND ?`,
+        [sd, ed],
+      );
+
+      const [limitRow] = await rows<{ setting_value: string }>(
+        c,
+        "SELECT setting_value FROM app_settings WHERE setting_key='low_stock_threshold'",
+      );
+      const threshold = Number(limitRow?.setting_value ?? 5);
+
+      const low_stock = await rows<{
+        product_id: number;
+        name: string;
+        stock: number;
+        category: string;
+      }>(
+        c,
+        `SELECT p.product_id, p.name, p.stock, c.name category
+         FROM products p JOIN categories c ON c.category_id=p.category_id
+         WHERE p.stock <= ? AND (p.deleted_at IS NULL OR p.deleted_at='0000-00-00 00:00:00')
+         ORDER BY p.stock ASC`,
+        [threshold],
+      );
+
+      return { summary, daily, top_products, by_status, by_category, quotes, low_stock };
+    });
+  });
+
+export const exportReportCSV = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        type: z.enum(["sales", "products", "status", "categories", "quotes", "low_stock"]),
+        startDate: z.string().trim(),
+        endDate: z.string().trim(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requirePermission("reports.export");
+    const report = await getSalesReport({
+      data: { startDate: data.startDate, endDate: data.endDate },
+    } as any);
+    let csv = "";
+    let filename = "";
+    if (data.type === "sales") {
+      csv =
+        "Date,Orders,Revenue (ETB)\n" +
+        (report.daily ?? []).map((r: any) => `"${r.date}",${r.orders},${r.revenue}`).join("\n");
+      filename = `sales-report-${data.startDate}-${data.endDate}.csv`;
+    } else if (data.type === "products") {
+      csv =
+        "Product,Qty Sold,Revenue (ETB)\n" +
+        (report.top_products ?? [])
+          .map((r: any) => `"${r.product_name}",${r.qty},${r.revenue}`)
+          .join("\n");
+      filename = `top-products-${data.startDate}-${data.endDate}.csv`;
+    } else if (data.type === "status") {
+      csv =
+        "Status,Count,Revenue (ETB)\n" +
+        (report.by_status ?? [])
+          .map((r: any) => `"${r.status}",${r.count},${r.revenue}`)
+          .join("\n");
+      filename = `orders-by-status-${data.startDate}-${data.endDate}.csv`;
+    } else if (data.type === "categories") {
+      csv =
+        "Category,Orders,Revenue (ETB)\n" +
+        (report.by_category ?? [])
+          .map((r: any) => `"${r.category}",${r.count},${r.revenue}`)
+          .join("\n");
+      filename = `revenue-by-category-${data.startDate}-${data.endDate}.csv`;
+    } else if (data.type === "quotes") {
+      const q = report.quotes;
+      csv =
+        "Metric,Value\nTotal Quotes," +
+        q.total +
+        "\nAccepted," +
+        q.accepted +
+        "\nConverted," +
+        q.converted;
+      filename = `quote-conversion-${data.startDate}-${data.endDate}.csv`;
+    } else if (data.type === "low_stock") {
+      csv =
+        "ID,Name,Stock,Category\n" +
+        (report.low_stock ?? [])
+          .map((r: any) => `${r.product_id},"${r.name}",${r.stock},"${r.category}"`)
+          .join("\n");
+      filename = `low-stock-${data.startDate}-${data.endDate}.csv`;
+    }
+    return { csv, filename };
+  });
+
+// ─── Settings: admin profile + team management ────────────────────────────────
+
+export const updateAdminProfile = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        name: z.string().trim().min(1).max(100),
+        email: z.string().trim().email().max(255),
+        phone: z.string().trim().max(30).optional().default(""),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requirePermission("profile.update");
+    return withDb(async (c) => {
+      const [old] = await rows<{ name: string; email: string; phone: string }>(
+        c,
+        "SELECT name, email, phone FROM users WHERE user_id=?",
+        [u.user_id],
+      );
+      if (data.email !== old.email) {
+        const dup = await rows(c, "SELECT 1 FROM users WHERE email=? AND user_id!=?", [
+          data.email.toLowerCase(),
+          u.user_id,
+        ]);
+        if (dup.length) throw new Error("This email is already in use by another account.");
+      }
+      await c.execute("UPDATE users SET name=?, email=?, phone=? WHERE user_id=?", [
+        data.name,
+        data.email.toLowerCase(),
+        data.phone,
+        u.user_id,
+      ]);
+      await logAction(null, "UPDATE_ADMIN_PROFILE", "user", u.user_id, old, data);
+      return { ok: true };
+    });
+  });
+
+export const deactivateTeamMember = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ user_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    const actor = await requireAdmin();
+    if (actor.user_id === data.user_id) throw new Error("You cannot deactivate your own account.");
+    return withDb(async (c) => {
+      const [target] = await rows<{ name: string; role: string; is_active: number }>(
+        c,
+        "SELECT name, role, is_active FROM users WHERE user_id=?",
+        [data.user_id],
+      );
+      if (!target) throw new Error("User not found.");
+      await c.execute("UPDATE users SET is_active=0 WHERE user_id=?", [data.user_id]);
+      await logAction(
+        null,
+        "DEACTIVATE_TEAM_MEMBER",
+        "user",
+        data.user_id,
+        { is_active: target.is_active },
+        { is_active: 0 },
+      );
+      return { ok: true };
+    });
+  });
+
+export const editTeamMember = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        user_id: z.number().int(),
+        name: z.string().trim().min(1).max(100),
+        email: z.string().trim().email().max(255),
+        phone: z.string().trim().max(30).optional().default(""),
+        role: z.enum(["staff", "admin"]),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireAdmin();
+    return withDb(async (c) => {
+      const [target] = await rows<{ name: string; email: string; phone: string; role: string }>(
+        c,
+        "SELECT name, email, phone, role FROM users WHERE user_id=?",
+        [data.user_id],
+      );
+      if (!target) throw new Error("User not found.");
+
+      // Guard last admin demotion
+      if (target.role === "admin" && data.role !== "admin") {
+        const [cnt] = await rows<{ count: number }>(
+          c,
+          "SELECT COUNT(*) count FROM user_roles ur JOIN users u ON u.user_id=ur.user_id WHERE ur.role='admin' AND u.is_active=1",
+        );
+        if ((cnt?.count ?? 0) <= 1) throw new Error("Cannot demote the last active administrator.");
+      }
+
+      if (data.email.toLowerCase() !== target.email) {
+        const dup = await rows(c, "SELECT 1 FROM users WHERE email=? AND user_id!=?", [
+          data.email.toLowerCase(),
+          data.user_id,
+        ]);
+        if (dup.length) throw new Error("This email is already in use.");
+      }
+
+      await c.execute("UPDATE users SET name=?, email=?, phone=?, role=? WHERE user_id=?", [
+        data.name,
+        data.email.toLowerCase(),
+        data.phone,
+        data.role,
+        data.user_id,
+      ]);
+      await c.execute("DELETE FROM user_roles WHERE user_id=?", [data.user_id]);
+      await c.execute("INSERT INTO user_roles (user_id, role) VALUES (?,?)", [
+        data.user_id,
+        data.role,
+      ]);
+      await logAction(null, "EDIT_TEAM_MEMBER", "user", data.user_id, target, data);
+      return { ok: true };
+    });
+  });
+
+// ─── Products: soft-delete + images ──────────────────────────────────────────
+
+export const softDeleteProduct = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ product_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    const u = await requirePermission("products.delete");
+    return withDb(async (c) => {
+      const [p] = await rows<{ name: string }>(c, "SELECT name FROM products WHERE product_id=?", [
+        data.product_id,
+      ]);
+      if (!p) throw new Error("Product not found.");
+      await c.execute("UPDATE products SET deleted_at=NOW() WHERE product_id=?", [data.product_id]);
+      await logAction(
+        null,
+        "SOFT_DELETE_PRODUCT",
+        "product",
+        data.product_id,
+        { name: p.name },
+        { deleted_at: "NOW()" },
+      );
+      return { ok: true };
+    });
+  });
+
+export const saveProductImages = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        product_id: z.number().int(),
+        images: z
+          .array(
+            z.object({
+              url: z.string().trim().min(1).max(500),
+              alt_text: z.string().trim().max(200).optional(),
+              sort_order: z.number().int().min(0).default(0),
+            }),
+          )
+          .max(10),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requirePermission("products.update");
+    return withDb(async (c) => {
+      await c.execute("DELETE FROM product_images WHERE product_id=?", [data.product_id]);
+      for (const img of data.images) {
+        await c.execute(
+          "INSERT INTO product_images (product_id, url, alt_text, sort_order) VALUES (?,?,?,?)",
+          [data.product_id, img.url, img.alt_text ?? null, img.sort_order],
+        );
+      }
+      return { ok: true, count: data.images.length };
+    });
+  });
+
+export const getProductImages = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ product_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("products.view");
+    return withDb((c) =>
+      rows<{ id: number; url: string; alt_text: string | null; sort_order: number }>(
+        c,
+        "SELECT id, url, alt_text, sort_order FROM product_images WHERE product_id=? ORDER BY sort_order ASC",
+        [data.product_id],
+      ),
+    );
+  });
+
+// =============================================================================
+// CUSTOMER MESSAGES / CONVERSATIONS
+// =============================================================================
+
+interface CustomerConversationRow {
+  conversation_id: number;
+  user_id: number;
+  subject: string;
+  topic: string;
+  status: "Awaiting Reply" | "Admin Replied" | "Resolved";
+  created_at: string;
+  updated_at: string;
+  last_message_text?: string | null;
+  last_message_at?: string | null;
+  unread_count?: number;
+}
+
+interface CustomerMessageRow {
+  message_id: number;
+  conversation_id: number;
+  sender_type: "customer" | "admin";
+  sender_id: number;
+  sender_name: string;
+  text: string;
+  is_read: number;
+  created_at: string;
+}
+
+export const getCustomerConversations = createServerFn({ method: "GET" }).handler(async () => {
+  const u = await requireUser();
+  return withDb((c) =>
+    rows<CustomerConversationRow>(
+      c,
+      `SELECT cc.conversation_id, cc.user_id, cc.subject, cc.topic, cc.status,
+              cc.created_at, cc.updated_at,
+              cm.text as last_message_text,
+              cm.created_at as last_message_at,
+              (SELECT COUNT(*) FROM customer_messages WHERE conversation_id = cc.conversation_id AND sender_type = 'admin' AND is_read = 0) as unread_count
+       FROM customer_conversations cc
+       LEFT JOIN customer_messages cm ON cm.conversation_id = cc.conversation_id
+       WHERE cc.user_id = ?
+       ORDER BY cc.updated_at DESC`,
+      [u.user_id],
+    ),
+  );
+});
+
+export const getCustomerConversationMessages = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ conversation_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    return withDb(async (c) => {
+      // Verify ownership
+      const [conv] = await rows<{ conversation_id: number; user_id: number }>(
+        c,
+        "SELECT conversation_id, user_id FROM customer_conversations WHERE conversation_id = ?",
+        [data.conversation_id],
+      );
+      if (!conv || conv.user_id !== u.user_id) throw new Error("Conversation not found.");
+
+      // Mark admin messages as read
+      await c.execute(
+        "UPDATE customer_messages SET is_read = 1 WHERE conversation_id = ? AND sender_type = 'admin'",
+        [data.conversation_id],
+      );
+
+      return rows<CustomerMessageRow>(
+        c,
+        "SELECT message_id, conversation_id, sender_type, sender_id, sender_name, text, is_read, created_at FROM customer_messages WHERE conversation_id = ? ORDER BY created_at ASC",
+        [data.conversation_id],
+      );
+    });
+  });
+
+export const createCustomerConversation = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        subject: z.string().trim().min(1).max(200),
+        topic: z.string().trim().min(1).max(100).default("General Inquiry"),
+        text: z.string().trim().min(1).max(5000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    return withDb(async (c) => {
+      await c.beginTransaction();
+      try {
+        const [convResult] = await c.execute(
+          "INSERT INTO customer_conversations (user_id, subject, topic, status) VALUES (?, ?, ?, 'Awaiting Reply')",
+          [u.user_id, data.subject, data.topic],
+        );
+        const conversationId = (convResult as { insertId: number }).insertId;
+
+        await c.execute(
+          "INSERT INTO customer_messages (conversation_id, sender_type, sender_id, sender_name, text) VALUES (?, 'customer', ?, ?, ?)",
+          [conversationId, u.user_id, u.name, data.text],
+        );
+
+        // Notify admins
+        const admins = await rows<{ user_id: number }>(
+          c,
+          "SELECT user_id FROM users u JOIN user_roles ur ON ur.user_id = u.user_id WHERE ur.role = 'admin' AND u.is_active = 1",
+        );
+        for (const admin of admins) {
+          await notify(
+            admin.user_id,
+            "customer_message",
+            `New Customer Message: ${data.subject}`,
+            `Customer ${u.name} started a new conversation.`,
+            `/admin?tab=messages&conversation=${conversationId}`,
+          );
+        }
+
+        await logAction(null, "CREATE_CUSTOMER_CONVERSATION", "conversation", conversationId, null, {
+          user_id: u.user_id,
+          subject: data.subject,
+          topic: data.topic,
+        });
+
+        await c.commit();
+        return { ok: true, conversation_id: conversationId };
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
+    });
+  });
+
+export const replyToCustomerConversation = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        conversation_id: z.number().int(),
+        text: z.string().trim().min(1).max(5000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    return withDb(async (c) => {
+      const [conv] = await rows<{ conversation_id: number; user_id: number; subject: string }>(
+        c,
+        "SELECT conversation_id, user_id, subject FROM customer_conversations WHERE conversation_id = ?",
+        [data.conversation_id],
+      );
+      if (!conv) throw new Error("Conversation not found.");
+
+      await c.beginTransaction();
+      try {
+        await c.execute(
+          "INSERT INTO customer_messages (conversation_id, sender_type, sender_id, sender_name, text) VALUES (?, ?, ?, ?, ?)",
+          [data.conversation_id, u.role === "admin" ? "admin" : "customer", u.user_id, u.name, data.text],
+        );
+
+        await c.execute(
+          "UPDATE customer_conversations SET status = ?, updated_at = NOW() WHERE conversation_id = ?",
+          [u.role === "admin" ? "Admin Replied" : "Awaiting Reply", data.conversation_id],
+        );
+
+        // Notify the other party
+        const targetUserId = u.role === "admin" ? conv.user_id : null; // Admins will be notified separately
+        if (targetUserId) {
+          await notify(
+            targetUserId,
+            "customer_message",
+            `Reply on: ${conv.subject}`,
+            `You have a new message from ${u.name}.`,
+            `/account?tab=messages&conversation=${data.conversation_id}`,
+          );
+        } else if (u.role === "customer") {
+          // Notify all admins
+          const admins = await rows<{ user_id: number }>(
+            c,
+            "SELECT user_id FROM users u JOIN user_roles ur ON ur.user_id = u.user_id WHERE ur.role = 'admin' AND u.is_active = 1",
+          );
+          for (const admin of admins) {
+            await notify(
+              admin.user_id,
+              "customer_message",
+              `Customer Reply: ${conv.subject}`,
+              `Customer ${u.name} replied.`,
+              `/admin?tab=messages&conversation=${data.conversation_id}`,
+            );
+          }
+        }
+
+        await logAction(null, "REPLY_CUSTOMER_CONVERSATION", "conversation", data.conversation_id, null, {
+          sender_type: u.role === "admin" ? "admin" : "customer",
+          sender_id: u.user_id,
+        });
+
+        await c.commit();
+        return { ok: true };
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
+    });
+  });
+
+export const resolveCustomerConversation = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ conversation_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    if (u.role !== "admin") throw Object.assign(new Error("Only admins can resolve conversations."), { status: 403 });
+    return withDb(async (c) => {
+      const [conv] = await rows<{ conversation_id: number }>(
+        c,
+        "SELECT conversation_id FROM customer_conversations WHERE conversation_id = ?",
+        [data.conversation_id],
+      );
+      if (!conv) throw new Error("Conversation not found.");
+      await c.execute(
+        "UPDATE customer_conversations SET status = 'Resolved', updated_at = NOW() WHERE conversation_id = ?",
+        [data.conversation_id],
+      );
+      await logAction(null, "RESOLVE_CUSTOMER_CONVERSATION", "conversation", data.conversation_id, null, {
+        resolved_by: u.user_id,
+      });
+      return { ok: true };
+    });
+  });
+
+// Admin: list all customer conversations
+export const getAllCustomerConversations = createServerFn({ method: "GET" }).handler(async () => {
+  await requirePermission("messages.view");
+  return withDb((c) =>
+    rows<CustomerConversationRow & { customer_name: string; customer_email: string }>(
+      c,
+      `SELECT cc.conversation_id, cc.user_id, cc.subject, cc.topic, cc.status,
+              cc.created_at, cc.updated_at,
+              u.name as customer_name,
+              u.email as customer_email,
+              cm.text as last_message_text,
+              cm.created_at as last_message_at,
+              (SELECT COUNT(*) FROM customer_messages WHERE conversation_id = cc.conversation_id AND sender_type = 'customer' AND is_read = 0) as unread_count
+       FROM customer_conversations cc
+       JOIN users u ON u.user_id = cc.user_id
+       LEFT JOIN customer_messages cm ON cm.conversation_id = cc.conversation_id
+       ORDER BY cc.updated_at DESC`,
+    ),
+  );
+});
+
+// Admin: get messages for a conversation
+export const getAdminCustomerConversationMessages = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ conversation_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("messages.view");
+    return withDb(async (c) => {
+      // Mark customer messages as read
+      await c.execute(
+        "UPDATE customer_messages SET is_read = 1 WHERE conversation_id = ? AND sender_type = 'customer'",
+        [data.conversation_id],
+      );
+      return rows<CustomerMessageRow>(
+        c,
+        "SELECT message_id, conversation_id, sender_type, sender_id, sender_name, text, is_read, created_at FROM customer_messages WHERE conversation_id = ? ORDER BY created_at ASC",
+        [data.conversation_id],
+      );
+    });
+  });
+
+// Admin: reply to customer conversation
+export const adminReplyToCustomerConversation = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        conversation_id: z.number().int(),
+        text: z.string().trim().min(1).max(5000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requirePermission("messages.reply");
+    return withDb(async (c) => {
+      const [conv] = await rows<{ conversation_id: number; user_id: number; subject: string }>(
+        c,
+        "SELECT conversation_id, user_id, subject FROM customer_conversations WHERE conversation_id = ?",
+        [data.conversation_id],
+      );
+      if (!conv) throw new Error("Conversation not found.");
+
+      await c.beginTransaction();
+      try {
+        await c.execute(
+          "INSERT INTO customer_messages (conversation_id, sender_type, sender_id, sender_name, text) VALUES (?, 'admin', ?, ?, ?)",
+          [data.conversation_id, u.user_id, u.name, data.text],
+        );
+
+        await c.execute(
+          "UPDATE customer_conversations SET status = 'Admin Replied', updated_at = NOW() WHERE conversation_id = ?",
+          [data.conversation_id],
+        );
+
+        // Notify customer
+        await notify(
+          conv.user_id,
+          "customer_message",
+          `Reply on: ${conv.subject}`,
+          `Polar Fiber team replied to your message.`,
+          `/account?tab=messages&conversation=${data.conversation_id}`,
+        );
+
+        await logAction(null, "ADMIN_REPLY_CUSTOMER_CONVERSATION", "conversation", data.conversation_id, null, {
+          admin_id: u.user_id,
+        });
+
+        await c.commit();
+        return { ok: true };
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
+    });
+  });
+
+// =============================================================================
+// CUSTOMER ADDRESSES
+// =============================================================================
+
+interface AddressRow {
+  address_id: number;
+  user_id: number;
+  label: string;
+  recipient: string;
+  phone: string;
+  line1: string;
+  line2: string | null;
+  city: string;
+  region: string | null;
+  country: string;
+  is_default: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export const getCustomerAddresses = createServerFn({ method: "GET" }).handler(async () => {
+  const u = await requireUser();
+  return withDb((c) =>
+    rows<AddressRow>(
+      c,
+      "SELECT address_id, user_id, label, recipient, phone, line1, line2, city, region, country, is_default, created_at, updated_at FROM addresses WHERE user_id = ? ORDER BY is_default DESC, created_at DESC",
+      [u.user_id],
+    ),
+  );
+});
+
+export const createCustomerAddress = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        label: z.string().trim().min(1).max(80),
+        recipient: z.string().trim().min(1).max(100),
+        phone: z.string().trim().max(30).default(""),
+        line1: z.string().trim().min(1).max(200),
+        line2: z.string().trim().max(200).nullable().optional(),
+        city: z.string().trim().min(1).max(100).default("Addis Ababa"),
+        region: z.string().trim().max(100).nullable().optional(),
+        country: z.string().trim().min(1).max(80).default("Ethiopia"),
+        is_default: z.boolean().default(false),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    return withDb(async (c) => {
+      await c.beginTransaction();
+      try {
+        // If this is default, unset other defaults
+        if (data.is_default) {
+          await c.execute("UPDATE addresses SET is_default = 0 WHERE user_id = ?", [u.user_id]);
+        }
+
+        const [result] = await c.execute(
+          "INSERT INTO addresses (user_id, label, recipient, phone, line1, line2, city, region, country, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [u.user_id, data.label, data.recipient, data.phone, data.line1, data.line2 ?? null, data.city, data.region ?? null, data.country, data.is_default ? 1 : 0],
+        );
+        const addressId = (result as { insertId: number }).insertId;
+
+        await logAction(null, "CREATE_CUSTOMER_ADDRESS", "address", addressId, null, {
+          user_id: u.user_id,
+          label: data.label,
+        });
+
+        await c.commit();
+        return { ok: true, address_id: addressId };
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
+    });
+  });
+
+export const updateCustomerAddress = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        address_id: z.number().int(),
+        label: z.string().trim().min(1).max(80).optional(),
+        recipient: z.string().trim().min(1).max(100).optional(),
+        phone: z.string().trim().max(30).optional(),
+        line1: z.string().trim().min(1).max(200).optional(),
+        line2: z.string().trim().max(200).nullable().optional(),
+        city: z.string().trim().min(1).max(100).optional(),
+        region: z.string().trim().max(100).nullable().optional(),
+        country: z.string().trim().min(1).max(80).optional(),
+        is_default: z.boolean().optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    const { address_id, ...fields } = data;
+    return withDb(async (c) => {
+      await c.beginTransaction();
+      try {
+        // Verify ownership
+        const [addr] = await rows<{ address_id: number; user_id: number }>(
+          c,
+          "SELECT address_id, user_id FROM addresses WHERE address_id = ?",
+          [address_id],
+        );
+        if (!addr || addr.user_id !== u.user_id) throw new Error("Address not found.");
+
+        // If setting as default, unset other defaults
+        if (fields.is_default) {
+          await c.execute("UPDATE addresses SET is_default = 0 WHERE user_id = ?", [u.user_id]);
+        }
+
+        const updates: string[] = [];
+        const values: unknown[] = [];
+        for (const [key, value] of Object.entries(fields)) {
+          if (value !== undefined) {
+            updates.push(`${key} = ?`);
+            values.push(value === null ? null : value);
+          }
+        }
+        if (updates.length > 0) {
+          values.push(address_id);
+          await c.execute(`UPDATE addresses SET ${updates.join(", ")} WHERE address_id = ?`, values);
+        }
+
+        await logAction(null, "UPDATE_CUSTOMER_ADDRESS", "address", address_id, null, {
+          user_id: u.user_id,
+          ...fields,
+        });
+
+        await c.commit();
+        return { ok: true };
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
+    });
+  });
+
+export const deleteCustomerAddress = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ address_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    return withDb(async (c) => {
+      const [addr] = await rows<{ address_id: number; user_id: number; is_default: number }>(
+        c,
+        "SELECT address_id, user_id, is_default FROM addresses WHERE address_id = ?",
+        [data.address_id],
+      );
+      if (!addr || addr.user_id !== u.user_id) throw new Error("Address not found.");
+
+      await c.execute("DELETE FROM addresses WHERE address_id = ?", [data.address_id]);
+
+      // If deleted address was default, make the most recent one default
+      if (addr.is_default) {
+        await c.execute(
+          "UPDATE addresses SET is_default = 1 WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+          [u.user_id],
+        );
+      }
+
+      await logAction(null, "DELETE_CUSTOMER_ADDRESS", "address", data.address_id, null, {
+        user_id: u.user_id,
+      });
+
+      return { ok: true };
+    });
+  });
+
+export const setDefaultCustomerAddress = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ address_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    return withDb(async (c) => {
+      const [addr] = await rows<{ address_id: number; user_id: number }>(
+        c,
+        "SELECT address_id, user_id FROM addresses WHERE address_id = ?",
+        [data.address_id],
+      );
+      if (!addr || addr.user_id !== u.user_id) throw new Error("Address not found.");
+
+      await c.execute("UPDATE addresses SET is_default = 0 WHERE user_id = ?", [u.user_id]);
+      await c.execute("UPDATE addresses SET is_default = 1 WHERE address_id = ?", [data.address_id]);
+
+      await logAction(null, "SET_DEFAULT_CUSTOMER_ADDRESS", "address", data.address_id, null, {
+        user_id: u.user_id,
+      });
+
+      return { ok: true };
+    });
+  });
+
+// =============================================================================
+// CUSTOMER FAVORITES
+// =============================================================================
+
+interface FavoriteRow {
+  id: number;
+  user_id: number;
+  product_id: number;
+  created_at: string;
+  product_name?: string;
+  product_price?: number;
+  product_image?: string;
+  product_capacity?: string | null;
+}
+
+export const getCustomerFavorites = createServerFn({ method: "GET" }).handler(async () => {
+  const u = await requireUser();
+  return withDb((c) =>
+    rows<FavoriteRow>(
+      c,
+      `SELECT f.id, f.user_id, f.product_id, f.created_at,
+              p.name as product_name, p.price as product_price, p.image as product_image, p.capacity as product_capacity
+       FROM favorites f
+       JOIN products p ON p.product_id = f.product_id
+       WHERE f.user_id = ? AND (p.deleted_at IS NULL OR p.deleted_at = '0000-00-00 00:00:00')
+       ORDER BY f.created_at DESC`,
+      [u.user_id],
+    ),
+  );
+});
+
+export const toggleCustomerFavorite = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ product_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    return withDb(async (c) => {
+      // Check if already favorited
+      const [existing] = await rows<{ id: number }>(
+        c,
+        "SELECT id FROM favorites WHERE user_id = ? AND product_id = ?",
+        [u.user_id, data.product_id],
+      );
+
+      if (existing) {
+        // Remove from favorites
+        await c.execute("DELETE FROM favorites WHERE id = ?", [existing.id]);
+        await logAction(null, "REMOVE_CUSTOMER_FAVORITE", "favorite", existing.id, null, {
+          user_id: u.user_id,
+          product_id: data.product_id,
+        });
+        return { ok: true, favorited: false };
+      } else {
+        // Add to favorites
+        const [result] = await c.execute(
+          "INSERT INTO favorites (user_id, product_id) VALUES (?, ?)",
+          [u.user_id, data.product_id],
+        );
+        const favoriteId = (result as { insertId: number }).insertId;
+        await logAction(null, "ADD_CUSTOMER_FAVORITE", "favorite", favoriteId, null, {
+          user_id: u.user_id,
+          product_id: data.product_id,
+        });
+        return { ok: true, favorited: true };
+      }
+    });
+  });
+
+export const removeCustomerFavorite = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ product_id: z.number().int() }).parse(d))
+  .handler(async ({ data }) => {
+    const u = await requireUser();
+    return withDb(async (c) => {
+      await c.execute("DELETE FROM favorites WHERE user_id = ? AND product_id = ?", [u.user_id, data.product_id]);
+      await logAction(null, "REMOVE_CUSTOMER_FAVORITE", "favorite", null, null, {
+        user_id: u.user_id,
+        product_id: data.product_id,
+      });
+      return { ok: true };
+    });
+  });

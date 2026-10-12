@@ -1,7 +1,13 @@
 import { Link } from "@tanstack/react-router";
 import { etb, type Product } from "@/shared/data";
 
+function getImageSrc(p: Product): string {
+  // Use database-served image if available, fallback to stored URL
+  return p.has_db_image ? `/api/images/${p.product_id}` : (p.image || `https://placehold.co/400x300/e2e8f0/64748b?text=${encodeURIComponent(p.name)}`);
+}
+
 export function ProductCard({ p }: { p: Product }) {
+  const imgSrc = getImageSrc(p);
   return (
     <Link
       to="/products/$id"
@@ -10,10 +16,15 @@ export function ProductCard({ p }: { p: Product }) {
     >
       <div className="aspect-[4/3] overflow-hidden bg-muted">
         <img
-          src={p.image}
+          src={imgSrc}
           alt={p.name}
           loading="lazy"
           className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
+          onError={(e) => {
+            const img = e.currentTarget;
+            img.onerror = null; // prevent infinite loop
+            img.src = `https://placehold.co/400x300/e2e8f0/64748b?text=${encodeURIComponent(p.name)}`;
+          }}
         />
       </div>
       <div className="p-4">
