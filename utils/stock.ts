@@ -28,7 +28,7 @@ export async function changeStock(
   reason: string,
   refType: string,
   refId: number | string,
-  userId: number,
+  userId: number | null,
 ): Promise<number> {
   if (!Number.isInteger(delta) || delta === 0) {
     throw new Error(`changeStock: delta must be a non-zero integer, got ${delta}`);

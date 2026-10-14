@@ -1,16 +1,27 @@
 import { withDb } from "../backend/db.server.ts";
-import { sendEmail, sendOrderStatusEmail, sendQuoteStatusEmail, sendMessageNotificationEmail } from "../backend/email";
+import {
+  sendEmail,
+  sendOrderStatusEmail,
+  sendQuoteStatusEmail,
+  sendMessageNotificationEmail,
+} from "../backend/email";
 
 /**
  * Sends a notification to a customer and saves it in the database.
  * Also sends email for important notification types.
  * Never throws an error or crashes the calling request.
  *
+ * Pass `options.dedupeKey` to make the notification idempotent: a repeated
+ * request (retry, double submit, browser refresh) with the same key inserts
+ * nothing and sends no email, because the insert is an INSERT IGNORE against
+ * the UNIQUE dedupe_key column.
+ *
  * @param {number} userId
  * @param {string} type
  * @param {string} title
  * @param {string} body
  * @param {string} [linkUrl]
+ * @param {{ dedupeKey?: string | null }} [options]
  */
 export async function notify(
   userId: number | null | undefined,
@@ -18,24 +29,46 @@ export async function notify(
   title: string,
   body: string,
   linkUrl: string | null = null,
+  options?: { dedupeKey?: string | null },
 ): Promise<void> {
   try {
     if (!userId) return;
+    const dedupeKey = options?.dedupeKey ? String(options.dedupeKey) : null;
     await withDb(async (c) => {
-      await c.execute(
-        "INSERT INTO notifications (user_id, type, title, body, link_url) VALUES (?, ?, ?, ?, ?)",
-        [userId, String(type), String(title), String(body), linkUrl ? String(linkUrl) : null],
+      const [res] = await c.execute(
+        dedupeKey
+          ? "INSERT IGNORE INTO notifications (user_id, type, title, body, link_url, dedupe_key) VALUES (?, ?, ?, ?, ?, ?)"
+          : "INSERT INTO notifications (user_id, type, title, body, link_url) VALUES (?, ?, ?, ?, ?)",
+        dedupeKey
+          ? [
+              userId,
+              String(type),
+              String(title),
+              String(body),
+              linkUrl ? String(linkUrl) : null,
+              dedupeKey,
+            ]
+          : [userId, String(type), String(title), String(body), linkUrl ? String(linkUrl) : null],
       );
+
+      // affectedRows === 0 means the dedupe key already existed: the
+      // notification was already delivered, so skip the email too.
+      if (dedupeKey && Number((res as { affectedRows?: number }).affectedRows ?? 1) === 0) return;
 
       // Get user email for email notifications
-      const [user] = await c.execute(
-        "SELECT email, name FROM users WHERE user_id = ?",
-        [userId],
-      );
+      // NOTE: c.execute() resolves to [rows, fieldPackets] — destructure the
+      // rows first. The old code read `user.email` off the rows array, which
+      // was always undefined, so emails were silently never sent.
+      const [userRows] = await c.execute("SELECT email, name FROM users WHERE user_id = ?", [
+        userId,
+      ]);
+      const user = (userRows as Array<{ email?: string; name?: string }>)[0];
+      const email = user?.email;
+      const name = user?.name ?? "";
 
-      if (user && user.email) {
+      if (email) {
         // Send email notifications for important types (fire-and-forget)
-        sendEmailByType(user.email, user.name, type, title, body, linkUrl).catch((err) => {
+        sendEmailByType(email, name, type, title, body, linkUrl).catch((err) => {
           console.error("[notify] Email send failed:", err);
         });
       }

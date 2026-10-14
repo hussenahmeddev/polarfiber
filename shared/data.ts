@@ -45,7 +45,7 @@ export type OrderItem = {
 };
 export type Order = {
   order_id: number;
-  user_id: number;
+  user_id: number | null;
   customer?: string;
   items: OrderItem[];
   total: number;
@@ -54,6 +54,13 @@ export type Order = {
   is_paid?: boolean | number;
   payment_method?: string;
   internal_notes?: string | null;
+  created_at: string;
+};
+
+export type OrderAccess = {
+  order_id: number;
+  access_pass: string;
+  email: string;
   created_at: string;
 };
 

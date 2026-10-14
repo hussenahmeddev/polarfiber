@@ -34,6 +34,53 @@ export function endSession() {
   deleteCookie(COOKIE, { path: "/", secure: true, sameSite: "none", partitioned: true });
 }
 
+// ─── Order-scoped session (verified guest customers) ──────────────────────────
+// A guest who proves ownership of an order (order number + email + order-access
+// password) gets this short-lived cookie. It carries ONLY the order id, so a
+// session can never address another order, and every order-scoped endpoint
+// compares it against the requested order_id.
+
+const ORDER_COOKIE = "pf_order_access";
+const ORDER_MAX_AGE = 60 * 30; // 30 minutes
+
+export function startOrderSession(orderId: number) {
+  const payload = Buffer.from(
+    JSON.stringify({ oid: orderId, exp: Date.now() + ORDER_MAX_AGE * 1000 }),
+  ).toString("base64url");
+  setCookie(ORDER_COOKIE, `${payload}.${sign(payload)}`, {
+    httpOnly: true,
+    secure: true,
+    // Same settings as pf_session so the storefront keeps working when the
+    // site is rendered inside an embedded frame.
+    sameSite: "none",
+    partitioned: true,
+    path: "/",
+    maxAge: ORDER_MAX_AGE,
+  });
+}
+
+export function endOrderSession() {
+  deleteCookie(ORDER_COOKIE, { path: "/", secure: true, sameSite: "none", partitioned: true });
+}
+
+export function orderSessionOrderId(): number | null {
+  const raw = getCookie(ORDER_COOKIE);
+  if (!raw) return null;
+  const [payload, sig] = raw.split(".");
+  if (!payload || !sig) return null;
+  const a = Buffer.from(sig),
+    b = Buffer.from(sign(payload));
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const d = JSON.parse(Buffer.from(payload, "base64url").toString());
+    if (!(d.exp > Date.now())) return null;
+    const oid = Number(d.oid);
+    return Number.isSafeInteger(oid) && oid > 0 ? oid : null;
+  } catch {
+    return null;
+  }
+}
+
 export function sessionUserId(): number | null {
   const raw = getCookie(COOKIE);
   if (!raw) return null;
@@ -234,11 +281,13 @@ export async function loadUser(uid: number): Promise<SessionUser | null> {
             ELSE 'customer'
           END
         ) AS role,
-        COALESCE(u.must_change_password, 0) AS must_change_password
+        COALESCE(u.must_change_password, 0) AS must_change_password,
+        COALESCE(u.is_active, 1) AS is_active
        FROM users u WHERE u.user_id=?`,
       [uid],
     );
     if (!r[0]) return null;
+    if (Number(r[0].is_active) === 0) return null;
     const { is_active: _active, ...user } = r[0];
     return {
       ...user,

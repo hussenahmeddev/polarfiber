@@ -11,27 +11,15 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AboutRouteImport } from './routes/about'
-import { Route as AccountRouteImport } from './routes/account'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as CartRouteImport } from './routes/cart'
 import { Route as ContactRouteImport } from './routes/contact'
-import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as FaqRouteImport } from './routes/faq'
-import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as QuoteRouteImport } from './routes/quote'
-import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as ServicesRouteImport } from './routes/services'
+import { Route as TrackOrderRouteImport } from './routes/track-order'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
-import { Route as DashboardIndexRouteImport } from './routes/dashboard/index'
-import { Route as DashboardAddressesRouteImport } from './routes/dashboard/addresses'
-import { Route as DashboardFavoritesRouteImport } from './routes/dashboard/favorites'
-import { Route as DashboardMessagesRouteImport } from './routes/dashboard/messages'
-import { Route as DashboardNotificationsRouteImport } from './routes/dashboard/notifications'
-import { Route as DashboardOrdersRouteImport } from './routes/dashboard/orders'
-import { Route as DashboardProfileRouteImport } from './routes/dashboard/profile'
-import { Route as DashboardQuotesRouteImport } from './routes/dashboard/quotes'
-import { Route as DashboardSupportRouteImport } from './routes/dashboard/support'
 import { Route as ProductsIndexRouteImport } from './routes/products.index'
 import { Route as ProductsIdRouteImport } from './routes/products.$id'
 
@@ -43,11 +31,6 @@ const IndexRoute = IndexRouteImport.update({
 const AboutRoute = AboutRouteImport.update({
   id: '/about',
   path: '/about',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AccountRoute = AccountRouteImport.update({
-  id: '/account',
-  path: '/account',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
@@ -65,19 +48,9 @@ const ContactRoute = ContactRouteImport.update({
   path: '/contact',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DashboardRoute = DashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const FaqRoute = FaqRouteImport.update({
   id: '/faq',
   path: '/faq',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
-  id: '/forgot-password',
-  path: '/forgot-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -90,65 +63,20 @@ const QuoteRoute = QuoteRouteImport.update({
   path: '/quote',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ResetPasswordRoute = ResetPasswordRouteImport.update({
-  id: '/reset-password',
-  path: '/reset-password',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ServicesRoute = ServicesRouteImport.update({
   id: '/services',
   path: '/services',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TrackOrderRoute = TrackOrderRouteImport.update({
+  id: '/track-order',
+  path: '/track-order',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AdminRoute,
-} as any)
-const DashboardIndexRoute = DashboardIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardAddressesRoute = DashboardAddressesRouteImport.update({
-  id: '/addresses',
-  path: '/addresses',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardFavoritesRoute = DashboardFavoritesRouteImport.update({
-  id: '/favorites',
-  path: '/favorites',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardMessagesRoute = DashboardMessagesRouteImport.update({
-  id: '/messages',
-  path: '/messages',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardNotificationsRoute = DashboardNotificationsRouteImport.update({
-  id: '/notifications',
-  path: '/notifications',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardOrdersRoute = DashboardOrdersRouteImport.update({
-  id: '/orders',
-  path: '/orders',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardProfileRoute = DashboardProfileRouteImport.update({
-  id: '/profile',
-  path: '/profile',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardQuotesRoute = DashboardQuotesRouteImport.update({
-  id: '/quotes',
-  path: '/quotes',
-  getParentRoute: () => DashboardRoute,
-} as any)
-const DashboardSupportRoute = DashboardSupportRouteImport.update({
-  id: '/support',
-  path: '/support',
-  getParentRoute: () => DashboardRoute,
 } as any)
 const ProductsIndexRoute = ProductsIndexRouteImport.update({
   id: '/products/',
@@ -164,81 +92,46 @@ const ProductsIdRoute = ProductsIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/account': typeof AccountRoute
   '/admin': typeof AdminRouteWithChildren
   '/cart': typeof CartRoute
   '/contact': typeof ContactRoute
-  '/dashboard': typeof DashboardRouteWithChildren
   '/faq': typeof FaqRoute
-  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/quote': typeof QuoteRoute
-  '/reset-password': typeof ResetPasswordRoute
   '/services': typeof ServicesRoute
-  '/dashboard/addresses': typeof DashboardAddressesRoute
-  '/dashboard/favorites': typeof DashboardFavoritesRoute
-  '/dashboard/messages': typeof DashboardMessagesRoute
-  '/dashboard/notifications': typeof DashboardNotificationsRoute
-  '/dashboard/orders': typeof DashboardOrdersRoute
-  '/dashboard/profile': typeof DashboardProfileRoute
-  '/dashboard/quotes': typeof DashboardQuotesRoute
-  '/dashboard/support': typeof DashboardSupportRoute
+  '/track-order': typeof TrackOrderRoute
   '/products/$id': typeof ProductsIdRoute
   '/admin/': typeof AdminIndexRoute
-  '/dashboard/': typeof DashboardIndexRoute
   '/products/': typeof ProductsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/account': typeof AccountRoute
   '/cart': typeof CartRoute
   '/contact': typeof ContactRoute
   '/faq': typeof FaqRoute
-  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/quote': typeof QuoteRoute
-  '/reset-password': typeof ResetPasswordRoute
   '/services': typeof ServicesRoute
-  '/dashboard/addresses': typeof DashboardAddressesRoute
-  '/dashboard/favorites': typeof DashboardFavoritesRoute
-  '/dashboard/messages': typeof DashboardMessagesRoute
-  '/dashboard/notifications': typeof DashboardNotificationsRoute
-  '/dashboard/orders': typeof DashboardOrdersRoute
-  '/dashboard/profile': typeof DashboardProfileRoute
-  '/dashboard/quotes': typeof DashboardQuotesRoute
-  '/dashboard/support': typeof DashboardSupportRoute
+  '/track-order': typeof TrackOrderRoute
   '/products/$id': typeof ProductsIdRoute
   '/admin': typeof AdminIndexRoute
-  '/dashboard': typeof DashboardIndexRoute
   '/products': typeof ProductsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/account': typeof AccountRoute
   '/admin': typeof AdminRouteWithChildren
   '/cart': typeof CartRoute
   '/contact': typeof ContactRoute
-  '/dashboard': typeof DashboardRouteWithChildren
   '/faq': typeof FaqRoute
-  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/quote': typeof QuoteRoute
-  '/reset-password': typeof ResetPasswordRoute
   '/services': typeof ServicesRoute
-  '/dashboard/addresses': typeof DashboardAddressesRoute
-  '/dashboard/favorites': typeof DashboardFavoritesRoute
-  '/dashboard/messages': typeof DashboardMessagesRoute
-  '/dashboard/notifications': typeof DashboardNotificationsRoute
-  '/dashboard/orders': typeof DashboardOrdersRoute
-  '/dashboard/profile': typeof DashboardProfileRoute
-  '/dashboard/quotes': typeof DashboardQuotesRoute
-  '/dashboard/support': typeof DashboardSupportRoute
+  '/track-order': typeof TrackOrderRoute
   '/products/$id': typeof ProductsIdRoute
   '/admin/': typeof AdminIndexRoute
-  '/dashboard/': typeof DashboardIndexRoute
   '/products/': typeof ProductsIndexRoute
 }
 export interface FileRouteTypes {
@@ -246,97 +139,59 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/about'
-    | '/account'
     | '/admin'
     | '/cart'
     | '/contact'
-    | '/dashboard'
     | '/faq'
-    | '/forgot-password'
     | '/login'
     | '/quote'
-    | '/reset-password'
     | '/services'
-    | '/dashboard/addresses'
-    | '/dashboard/favorites'
-    | '/dashboard/messages'
-    | '/dashboard/notifications'
-    | '/dashboard/orders'
-    | '/dashboard/profile'
-    | '/dashboard/quotes'
-    | '/dashboard/support'
+    | '/track-order'
     | '/products/$id'
     | '/admin/'
-    | '/dashboard/'
     | '/products/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/about'
-    | '/account'
     | '/cart'
     | '/contact'
     | '/faq'
-    | '/forgot-password'
     | '/login'
     | '/quote'
-    | '/reset-password'
     | '/services'
-    | '/dashboard/addresses'
-    | '/dashboard/favorites'
-    | '/dashboard/messages'
-    | '/dashboard/notifications'
-    | '/dashboard/orders'
-    | '/dashboard/profile'
-    | '/dashboard/quotes'
-    | '/dashboard/support'
+    | '/track-order'
     | '/products/$id'
     | '/admin'
-    | '/dashboard'
     | '/products'
   id:
     | '__root__'
     | '/'
     | '/about'
-    | '/account'
     | '/admin'
     | '/cart'
     | '/contact'
-    | '/dashboard'
     | '/faq'
-    | '/forgot-password'
     | '/login'
     | '/quote'
-    | '/reset-password'
     | '/services'
-    | '/dashboard/addresses'
-    | '/dashboard/favorites'
-    | '/dashboard/messages'
-    | '/dashboard/notifications'
-    | '/dashboard/orders'
-    | '/dashboard/profile'
-    | '/dashboard/quotes'
-    | '/dashboard/support'
+    | '/track-order'
     | '/products/$id'
     | '/admin/'
-    | '/dashboard/'
     | '/products/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
-  AccountRoute: typeof AccountRoute
   AdminRoute: typeof AdminRouteWithChildren
   CartRoute: typeof CartRoute
   ContactRoute: typeof ContactRoute
-  DashboardRoute: typeof DashboardRouteWithChildren
   FaqRoute: typeof FaqRoute
-  ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
   QuoteRoute: typeof QuoteRoute
-  ResetPasswordRoute: typeof ResetPasswordRoute
   ServicesRoute: typeof ServicesRoute
+  TrackOrderRoute: typeof TrackOrderRoute
   ProductsIdRoute: typeof ProductsIdRoute
   ProductsIndexRoute: typeof ProductsIndexRoute
 }
@@ -355,13 +210,6 @@ declare module '@tanstack/react-router' {
       path: '/about'
       fullPath: '/about'
       preLoaderRoute: typeof AboutRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/account': {
-      id: '/account'
-      path: '/account'
-      fullPath: '/account'
-      preLoaderRoute: typeof AccountRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -385,25 +233,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ContactRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/dashboard': {
-      id: '/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof DashboardRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/faq': {
       id: '/faq'
       path: '/faq'
       fullPath: '/faq'
       preLoaderRoute: typeof FaqRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/forgot-password': {
-      id: '/forgot-password'
-      path: '/forgot-password'
-      fullPath: '/forgot-password'
-      preLoaderRoute: typeof ForgotPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -420,18 +254,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof QuoteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/reset-password': {
-      id: '/reset-password'
-      path: '/reset-password'
-      fullPath: '/reset-password'
-      preLoaderRoute: typeof ResetPasswordRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/services': {
       id: '/services'
       path: '/services'
       fullPath: '/services'
       preLoaderRoute: typeof ServicesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/track-order': {
+      id: '/track-order'
+      path: '/track-order'
+      fullPath: '/track-order'
+      preLoaderRoute: typeof TrackOrderRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/': {
@@ -440,69 +274,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
-    }
-    '/dashboard/': {
-      id: '/dashboard/'
-      path: '/'
-      fullPath: '/dashboard/'
-      preLoaderRoute: typeof DashboardIndexRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/addresses': {
-      id: '/dashboard/addresses'
-      path: '/addresses'
-      fullPath: '/dashboard/addresses'
-      preLoaderRoute: typeof DashboardAddressesRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/favorites': {
-      id: '/dashboard/favorites'
-      path: '/favorites'
-      fullPath: '/dashboard/favorites'
-      preLoaderRoute: typeof DashboardFavoritesRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/messages': {
-      id: '/dashboard/messages'
-      path: '/messages'
-      fullPath: '/dashboard/messages'
-      preLoaderRoute: typeof DashboardMessagesRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/notifications': {
-      id: '/dashboard/notifications'
-      path: '/notifications'
-      fullPath: '/dashboard/notifications'
-      preLoaderRoute: typeof DashboardNotificationsRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/orders': {
-      id: '/dashboard/orders'
-      path: '/orders'
-      fullPath: '/dashboard/orders'
-      preLoaderRoute: typeof DashboardOrdersRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/profile': {
-      id: '/dashboard/profile'
-      path: '/profile'
-      fullPath: '/dashboard/profile'
-      preLoaderRoute: typeof DashboardProfileRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/quotes': {
-      id: '/dashboard/quotes'
-      path: '/quotes'
-      fullPath: '/dashboard/quotes'
-      preLoaderRoute: typeof DashboardQuotesRouteImport
-      parentRoute: typeof DashboardRoute
-    }
-    '/dashboard/support': {
-      id: '/dashboard/support'
-      path: '/support'
-      fullPath: '/dashboard/support'
-      preLoaderRoute: typeof DashboardSupportRouteImport
-      parentRoute: typeof DashboardRoute
     }
     '/products/': {
       id: '/products/'
@@ -531,48 +302,17 @@ const AdminRouteChildren: AdminRouteChildren = {
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
-interface DashboardRouteChildren {
-  DashboardAddressesRoute: typeof DashboardAddressesRoute
-  DashboardFavoritesRoute: typeof DashboardFavoritesRoute
-  DashboardMessagesRoute: typeof DashboardMessagesRoute
-  DashboardNotificationsRoute: typeof DashboardNotificationsRoute
-  DashboardOrdersRoute: typeof DashboardOrdersRoute
-  DashboardProfileRoute: typeof DashboardProfileRoute
-  DashboardQuotesRoute: typeof DashboardQuotesRoute
-  DashboardSupportRoute: typeof DashboardSupportRoute
-  DashboardIndexRoute: typeof DashboardIndexRoute
-}
-
-const DashboardRouteChildren: DashboardRouteChildren = {
-  DashboardAddressesRoute: DashboardAddressesRoute,
-  DashboardFavoritesRoute: DashboardFavoritesRoute,
-  DashboardMessagesRoute: DashboardMessagesRoute,
-  DashboardNotificationsRoute: DashboardNotificationsRoute,
-  DashboardOrdersRoute: DashboardOrdersRoute,
-  DashboardProfileRoute: DashboardProfileRoute,
-  DashboardQuotesRoute: DashboardQuotesRoute,
-  DashboardSupportRoute: DashboardSupportRoute,
-  DashboardIndexRoute: DashboardIndexRoute,
-}
-
-const DashboardRouteWithChildren = DashboardRoute._addFileChildren(
-  DashboardRouteChildren,
-)
-
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
-  AccountRoute: AccountRoute,
   AdminRoute: AdminRouteWithChildren,
   CartRoute: CartRoute,
   ContactRoute: ContactRoute,
-  DashboardRoute: DashboardRouteWithChildren,
   FaqRoute: FaqRoute,
-  ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
   QuoteRoute: QuoteRoute,
-  ResetPasswordRoute: ResetPasswordRoute,
   ServicesRoute: ServicesRoute,
+  TrackOrderRoute: TrackOrderRoute,
   ProductsIdRoute: ProductsIdRoute,
   ProductsIndexRoute: ProductsIndexRoute,
 }

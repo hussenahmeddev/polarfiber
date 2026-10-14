@@ -80,14 +80,47 @@ export async function sendOrderStatusEmail(
   await sendEmail({
     to: userEmail,
     subject: `Order #${orderId} Status Update - Polar Fiber`,
-    text: `Dear ${userName},\n\nYour order #${orderId} (ETB ${orderTotal.toLocaleString()}) status has been updated to: ${newStatus}.\n\nTrack your order at: https://polarfiber.com.et/account?tab=orders\n\nThank you for choosing Polar Fiber!`,
+     text: `Dear ${userName},\n\nYour order #${orderId} (ETB ${orderTotal.toLocaleString()}) status has been updated to: ${newStatus}.\n\nTrack your order at: https://polarfiber.com.et/track-order\n\nThank you for choosing Polar Fiber!`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #0ea5e9;">Order Status Update</h2>
         <p>Dear ${userName},</p>
         <p>Your order <strong>#${orderId}</strong> (ETB ${orderTotal.toLocaleString()}) status has been updated to:</p>
         <p style="font-size: 18px; font-weight: bold; color: #0ea5e9;">${newStatus}</p>
-        <p><a href="https://polarfiber.com.et/account?tab=orders" style="color: #0ea5e9;">Track your order</a></p>
+        <p><a href="https://polarfiber.com.et/track-order" style="color: #0ea5e9;">Track your order</a></p>
+        <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;" />
+        <p style="color: #64748b; font-size: 14px;">Thank you for choosing Polar Fiber!</p>
+      </div>
+    `,
+  });
+}
+
+/**
+ * Sends an order confirmation email for guest checkouts with access password.
+ */
+export async function sendOrderConfirmation(
+  userEmail: string,
+  userName: string,
+  orderId: number,
+  orderTotal: number,
+  accessPassword: string,
+): Promise<void> {
+  await sendEmail({
+    to: userEmail,
+    subject: `Order #${orderId} Confirmation - Polar Fiber`,
+    text: `Dear ${userName},\n\nThank you for your order #${orderId} (ETB ${orderTotal.toLocaleString()}).\n\nTo track your order, visit https://polarfiber.com.et/track-order and use:\n  Order ID: ${orderId}\n  Access Password: ${accessPassword}\n\nThank you for choosing Polar Fiber!`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #0ea5e9;">Order Confirmation</h2>
+        <p>Dear ${userName},</p>
+        <p>Thank you for your order <strong>#${orderId}</strong> (ETB ${orderTotal.toLocaleString()}).</p>
+        <p>To track your order, visit:</p>
+        <p style="font-size: 18px; font-weight: bold; color: #0ea5e9;">https://polarfiber.com.et/track-order</p>
+        <p>Use the following credentials to view your order details:</p>
+        <table style="margin: 15px 0; font-family: monospace; font-size: 16px;">
+          <tr><td style="padding-right: 10px;">Order ID:</td><td><strong>${orderId}</strong></td></tr>
+          <tr><td style="padding-right: 10px;">Access Password:</td><td><strong>${accessPassword}</strong></td></tr>
+        </table>
         <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;" />
         <p style="color: #64748b; font-size: 14px;">Thank you for choosing Polar Fiber!</p>
       </div>
@@ -108,7 +141,7 @@ export async function sendQuoteStatusEmail(
   await sendEmail({
     to: userEmail,
     subject: `Quote #${quoteId} Update - Polar Fiber`,
-    text: `Dear ${userName},\n\nYour quote request #${quoteId} status has been updated to: ${newStatus}.${quotedAmount ? ` Quoted amount: ETB ${quotedAmount.toLocaleString()}` : ""}\n\nView details at: https://polarfiber.com.et/account?tab=quotes\n\nThank you for choosing Polar Fiber!`,
+     text: `Dear ${userName},\n\nYour quote request #${quoteId} status has been updated to: ${newStatus}.${quotedAmount ? ` Quoted amount: ETB ${quotedAmount.toLocaleString()}` : ""}\n\nView details at: https://polarfiber.com.et/track-order\n\nThank you for choosing Polar Fiber!`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #0ea5e9;">Quote Request Update</h2>
@@ -116,7 +149,7 @@ export async function sendQuoteStatusEmail(
         <p>Your quote request <strong>#${quoteId}</strong> status has been updated to:</p>
         <p style="font-size: 18px; font-weight: bold; color: #0ea5e9;">${newStatus}</p>
         ${quotedAmount ? `<p>Quoted amount: <strong>ETB ${quotedAmount.toLocaleString()}</strong></p>` : ""}
-        <p><a href="https://polarfiber.com.et/account?tab=quotes" style="color: #0ea5e9;">View quote details</a></p>
+        <p><a href="https://polarfiber.com.et/track-order" style="color: #0ea5e9;">View quote details</a></p>
         <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;" />
         <p style="color: #64748b; font-size: 14px;">Thank you for choosing Polar Fiber!</p>
       </div>

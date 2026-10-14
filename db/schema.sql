@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS user_roles (
 
 CREATE TABLE IF NOT EXISTS orders (
   order_id INT AUTO_INCREMENT PRIMARY KEY,
-  user_id INT NOT NULL,
+  user_id INT NULL,
   total DECIMAL(12,2) NOT NULL,
   status ENUM('Pending','Confirmed','In Production','Out for Delivery','Delivered','Cancelled') NOT NULL DEFAULT 'Pending',
   address VARCHAR(200) NOT NULL,
@@ -50,8 +50,18 @@ CREATE TABLE IF NOT EXISTS orders (
   payment_method VARCHAR(50) NOT NULL DEFAULT 'cash_on_delivery',
   internal_notes TEXT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(user_id)
+  FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
 ) AUTO_INCREMENT = 1001;
+
+CREATE TABLE IF NOT EXISTS order_access (
+  order_id    INT PRIMARY KEY,
+  access_pass CHAR(96) NOT NULL,
+  email       VARCHAR(255) NOT NULL,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE
+);
+ALTER TABLE order_access
+  ADD INDEX idx_order_access_email (email);
 
 CREATE TABLE IF NOT EXISTS order_items (
   item_id INT AUTO_INCREMENT PRIMARY KEY,

@@ -1,7 +1,17 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { getOrderStatusHistory } from "@/backend/api.functions";
+import {
+  getOrderStatusHistory,
+  getOrderMessages,
+  sendOrderMessage,
+  getGuestOrderStatus,
+  getGuestOrderThread,
+  sendGuestOrderMessage,
+  getOrderDelivery,
+  getOrderInternalNotes,
+  addOrderInternalNote,
+} from "@/backend/api.functions";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +34,7 @@ import {
   User,
   FileText,
   History,
+  MessageSquare,
 } from "lucide-react";
 import { cn } from "@/frontend/utils";
 import { Can } from "@/frontend/components/Can";
@@ -32,13 +43,29 @@ interface OrderDrawerProps {
   order: Order | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  mode?: "customer" | "admin";
+  mode?: "customer" | "admin" | "guest";
   onReorder?: (order: Order) => void;
+  onCancel?: (order: Order) => void;
   onStatusChange?: (orderId: number, status: OrderStatus) => void;
   statusUpdating?: boolean;
   onAddNote?: (orderId: number, note: string) => Promise<void>;
   /** Restrict the status dropdown to a specific set (e.g. staff-valid transitions). */
   allowedStatuses?: OrderStatus[];
+  /** Guest tracking mode: hides staff-only sections and shows the reply box. */
+  guestOrderId?: number;
+  onDispatch?: (orderId: number) => void;
+  onCompleteDelivery?: (orderId: number) => void;
+}
+
+interface DrawerMessage {
+  id: number;
+  sender_type: string;
+  sender_name: string;
+  kind: string;
+  body: string | null;
+  status_from: string | null;
+  status_to: string | null;
+  created_at: string;
 }
 
 const STEPS: { status: OrderStatus; label: string; icon: React.ElementType }[] = [
@@ -64,20 +91,105 @@ export function OrderDrawer({
   onOpenChange,
   mode = "customer",
   onReorder,
+  onCancel,
   onStatusChange,
   statusUpdating = false,
   onAddNote,
   allowedStatuses,
+  guestOrderId,
+  onDispatch,
+  onCompleteDelivery,
 }: OrderDrawerProps) {
   const [noteInput, setNoteInput] = React.useState("");
   const [noteSubmitting, setNoteSubmitting] = React.useState(false);
+  const [messageInput, setMessageInput] = React.useState("");
+  const [messageSubmitting, setMessageSubmitting] = React.useState(false);
 
   const fetchOrderHistory = useServerFn(getOrderStatusHistory);
   const { data: statusHistory } = useQuery({
     queryKey: ["order-status-history", order?.order_id],
     queryFn: () => fetchOrderHistory({ data: { order_id: order!.order_id } }),
-    enabled: !!order?.order_id,
+    enabled: mode === "admin" && !!order?.order_id,
   });
+
+  // Customer communication thread — shared by the staff modal and the guest
+  // tracking page. Polling keeps it live without a page refresh.
+  const fetchMessages = useServerFn(getOrderMessages);
+  const threadOrderId = mode === "admin" ? order?.order_id : guestOrderId;
+  const messagesQuery = useQuery({
+    queryKey: ["order-messages", threadOrderId, mode],
+    queryFn: () => fetchMessages({ data: { order_id: threadOrderId! } }),
+    enabled: open && !!threadOrderId,
+    refetchInterval: open && !!threadOrderId ? 10000 : false,
+  });
+  const messages = (messagesQuery.data?.messages ?? []) as DrawerMessage[];
+  const customerContact = messagesQuery.data?.customer as
+    | { name: string | null; email: string | null; phone: string | null; address: string }
+    | undefined;
+
+  const sendMessage = useServerFn(sendOrderMessage);
+  const fetchInternalNotes = useServerFn(getOrderInternalNotes);
+  const pushInternalNote = useServerFn(addOrderInternalNote);
+  const fetchDelivery = useServerFn(getOrderDelivery);
+
+  // Guest tracking: the verified session proves ownership, so the thread is
+  // read and replied to with the same order-scoped session.
+  const fetchGuestThread = useServerFn(getGuestOrderThread);
+  const sendGuestMessage = useServerFn(sendGuestOrderMessage);
+  const guestMessagesQuery = useQuery({
+    queryKey: ["guest-order-thread", guestOrderId],
+    queryFn: () => fetchGuestThread({ data: { order_id: guestOrderId! } }),
+    enabled: mode === "guest" && !!guestOrderId,
+    refetchInterval: mode === "guest" && !!guestOrderId ? 10000 : false,
+  });
+  const guestMessages = (guestMessagesQuery.data?.messages ?? []) as DrawerMessage[];
+
+  async function submitGuestMessage() {
+    const text = messageInput.trim();
+    if (!text || !guestOrderId) return;
+    setMessageSubmitting(true);
+    try {
+      await sendGuestMessage({ data: { order_id: guestOrderId, message: text } });
+      setMessageInput("");
+      await guestMessagesQuery.refetch();
+    } finally {
+      setMessageSubmitting(false);
+    }
+  }
+
+  const internalNotesQuery = useQuery({
+    queryKey: ["order-internal-notes", order?.order_id],
+    queryFn: () => fetchInternalNotes({ data: { order_id: order!.order_id } }),
+    enabled: mode === "admin" && !!order?.order_id,
+  });
+  const internalNotes = (internalNotesQuery.data ?? []) as Array<{
+    id: number;
+    staff_name: string;
+    note: string;
+    created_at: string;
+  }>;
+
+  const deliveryQuery = useQuery({
+    queryKey: ["order-delivery", order?.order_id],
+    queryFn: () => fetchDelivery({ data: { order_id: order!.order_id } }),
+    enabled: mode === "admin" && !!order?.order_id,
+  });
+  const delivery = deliveryQuery.data;
+
+  const isStaffView = mode === "admin";
+
+  async function submitMessage() {
+    const text = messageInput.trim();
+    if (!text || !threadOrderId) return;
+    setMessageSubmitting(true);
+    try {
+      await sendMessage({ data: { order_id: threadOrderId, message: text } });
+      setMessageInput("");
+      await messagesQuery.refetch();
+    } finally {
+      setMessageSubmitting(false);
+    }
+  }
 
   if (!order) return null;
 
@@ -167,14 +279,199 @@ export function OrderDrawer({
           )}
         </div>
 
-        {/* Customer Info (Admin mode or if customer name exists) */}
-        {mode === "admin" && order.customer && (
-          <div className="rounded-xl border border-border bg-muted/40 p-4">
+        {/* Customer Information (Admin mode) */}
+        {mode === "admin" && (customerContact || order.customer) && (
+          <div className="rounded-xl border border-border bg-muted/40 p-4 space-y-1.5">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <User className="h-4 w-4" />
               Customer Information
             </div>
-            <p className="mt-2 text-sm font-semibold text-foreground">{order.customer}</p>
+            <p className="text-sm font-semibold text-foreground">
+              {customerContact?.name ?? order.customer}
+            </p>
+            {customerContact?.email && (
+              <p className="text-xs text-muted-foreground">{customerContact.email}</p>
+            )}
+            {customerContact?.phone && (
+              <p className="text-xs text-muted-foreground">{customerContact.phone}</p>
+            )}
+          </div>
+        )}
+
+        {/* Customer Communication (guest) */}
+        {mode === "guest" && !!guestOrderId && (
+          <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <MessageSquare className="h-3.5 w-3.5 text-primary" />
+              Messages with Polar Fiber
+            </span>
+
+            {guestMessagesQuery.isLoading && (
+              <p className="text-xs text-muted-foreground">Loading conversation…</p>
+            )}
+            {guestMessagesQuery.isError && (
+              <p className="text-xs text-destructive">
+                Could not load the conversation. Try again in a moment.
+              </p>
+            )}
+            {!guestMessagesQuery.isLoading &&
+              !guestMessagesQuery.isError &&
+              guestMessages.length === 0 && (
+                <p className="text-xs text-muted-foreground italic">
+                  No messages yet. Ask us about delivery, address or stock.
+                </p>
+              )}
+
+            {guestMessages.length > 0 && (
+              <div className="max-h-64 space-y-2.5 overflow-y-auto">
+                {guestMessages.map((m) => {
+                  const mine = m.sender_type === "customer";
+                  return (
+                    <div
+                      key={m.id}
+                      className={cn("flex flex-col", mine ? "items-end" : "items-start")}
+                    >
+                      <div
+                        className={cn(
+                          "max-w-[85%] rounded-lg px-3 py-2 text-xs",
+                          mine
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-background text-foreground border border-border/60",
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-3 mb-0.5">
+                          <span className="font-semibold">{m.sender_name}</span>
+                          <span
+                            className={cn(
+                              mine ? "text-primary-foreground/70" : "text-muted-foreground",
+                              "text-[10px]",
+                            )}
+                          >
+                            {m.created_at}
+                          </span>
+                        </div>
+                        {m.kind !== "message" ? (
+                          <span className="text-[10px] uppercase tracking-wide">
+                            {m.status_to ? `${m.status_from} → ${m.status_to}` : m.kind}
+                          </span>
+                        ) : (
+                          <p className="whitespace-pre-wrap break-words">{m.body ?? ""}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <input
+                type="text"
+                placeholder="Ask us about delivery, address or stock…"
+                value={messageInput}
+                onChange={(e) => setMessageInput(e.target.value)}
+                maxLength={2000}
+                className="flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && messageInput.trim()) {
+                    e.preventDefault();
+                    void submitGuestMessage();
+                  }
+                }}
+              />
+              <Button
+                size="sm"
+                disabled={messageSubmitting || !messageInput.trim()}
+                onClick={() => void submitGuestMessage()}
+                className="text-xs h-8 px-3"
+              >
+                {messageSubmitting ? "Sending…" : "Send"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Customer Communication */}
+        {isStaffView && !!threadOrderId && (
+          <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <MessageSquare className="h-3.5 w-3.5 text-primary" />
+              Customer Communication
+            </span>
+
+            {messagesQuery.isLoading && (
+              <p className="text-xs text-muted-foreground">Loading conversation…</p>
+            )}
+            {messagesQuery.isError && (
+              <p className="text-xs text-destructive">
+                Could not load the conversation. Try again in a moment.
+              </p>
+            )}
+            {!messagesQuery.isLoading && !messagesQuery.isError && messages.length === 0 && (
+              <p className="text-xs text-muted-foreground italic">
+                No messages yet. Start the conversation below.
+              </p>
+            )}
+
+            {messages.length > 0 && (
+              <div className="max-h-64 space-y-2.5 overflow-y-auto">
+                {messages.map((m) => {
+                  const mine = m.sender_type !== "customer";
+                  return (
+                    <div
+                      key={m.id}
+                      className={cn("flex flex-col", mine ? "items-end" : "items-start")}
+                    >
+                      <div
+                        className={cn(
+                          "max-w-[85%] rounded-lg px-3 py-2 text-xs",
+                          mine
+                            ? "bg-primary/10 text-foreground border border-primary/20"
+                            : "bg-background text-foreground border border-border/60",
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-3 mb-0.5">
+                          <span className="font-semibold">{m.sender_name}</span>
+                          <span className="text-[10px] text-muted-foreground">{m.created_at}</span>
+                        </div>
+                        {m.kind !== "message" ? (
+                          <span className="text-[10px] uppercase tracking-wide text-primary">
+                            {m.status_to ? `${m.status_from} → ${m.status_to}` : m.kind}
+                          </span>
+                        ) : (
+                          <p className="whitespace-pre-wrap break-words">{m.body ?? ""}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <input
+                type="text"
+                placeholder="Reply to the customer about delivery, address or stock…"
+                value={messageInput}
+                onChange={(e) => setMessageInput(e.target.value)}
+                maxLength={2000}
+                className="flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && messageInput.trim()) {
+                    e.preventDefault();
+                    void submitMessage();
+                  }
+                }}
+              />
+              <Button
+                size="sm"
+                disabled={messageSubmitting || !messageInput.trim()}
+                onClick={() => void submitMessage()}
+                className="text-xs h-8 px-3"
+              >
+                {messageSubmitting ? "Sending…" : "Send"}
+              </Button>
+            </div>
           </div>
         )}
 
@@ -221,20 +518,45 @@ export function OrderDrawer({
             <span className="font-display text-xl font-bold text-primary">{etb(order.total)}</span>
           </div>
 
-          {/* Internal Notes (Admin & Staff Only) */}
+          {/* Internal Notes (Admin & Staff Only) — never shown to customers */}
           {mode === "admin" && (
             <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
               <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                 <FileText className="h-3.5 w-3.5 text-primary" />
                 Staff Internal Notes (Confidential)
               </span>
-              {order.internal_notes ? (
-                <div className="rounded-lg bg-background p-3 text-xs text-foreground font-mono whitespace-pre-wrap max-h-36 overflow-y-auto border border-border/60">
-                  {order.internal_notes}
+
+              {internalNotes.length > 0 ? (
+                <div className="divide-y divide-border/50 max-h-40 overflow-y-auto">
+                  {internalNotes.map((n) => (
+                    <div key={n.id} className="py-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-foreground">
+                          {n.staff_name}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">{n.created_at}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap">
+                        {n.note}
+                      </p>
+                    </div>
+                  ))}
                 </div>
               ) : (
-                <p className="text-xs text-muted-foreground italic">No internal notes added yet.</p>
+                <>
+                  {/* Legacy blob kept for backward compatibility */}
+                  {order.internal_notes ? (
+                    <div className="rounded-lg bg-background p-3 text-xs text-foreground font-mono whitespace-pre-wrap max-h-36 overflow-y-auto border border-border/60">
+                      {order.internal_notes}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground italic">
+                      No internal notes added yet.
+                    </p>
+                  )}
+                </>
               )}
+
               {onAddNote && (
                 <div className="flex gap-2 pt-1">
                   <input
@@ -242,6 +564,7 @@ export function OrderDrawer({
                     placeholder="Add confidential internal note..."
                     value={noteInput}
                     onChange={(e) => setNoteInput(e.target.value)}
+                    maxLength={2000}
                     className="flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                     onKeyDown={async (e) => {
                       if (e.key === "Enter" && noteInput.trim()) {
@@ -251,6 +574,7 @@ export function OrderDrawer({
                         setNoteSubmitting(true);
                         try {
                           await onAddNote(order.order_id, txt);
+                          await internalNotesQuery.refetch();
                         } finally {
                           setNoteSubmitting(false);
                         }
@@ -267,6 +591,7 @@ export function OrderDrawer({
                       setNoteSubmitting(true);
                       try {
                         await onAddNote(order.order_id, txt);
+                        await internalNotesQuery.refetch();
                       } finally {
                         setNoteSubmitting(false);
                       }
@@ -277,6 +602,121 @@ export function OrderDrawer({
                   </Button>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Delivery Information (staff only) */}
+          {mode === "admin" && (
+            <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-3">
+              <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <Truck className="h-3.5 w-3.5 text-primary" />
+                Delivery Information
+              </span>
+
+              {deliveryQuery.isLoading && (
+                <p className="text-xs text-muted-foreground">Loading delivery details…</p>
+              )}
+              {deliveryQuery.isError && (
+                <p className="text-xs text-destructive">Could not load delivery details.</p>
+              )}
+
+              <dl className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+                <div>
+                  <dt className="text-muted-foreground">Destination</dt>
+                  <dd className="font-medium text-foreground">{order.address}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Customer phone</dt>
+                  <dd className="font-medium text-foreground">
+                    {delivery?.customer_phone ?? "Not provided"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Assigned delivery staff</dt>
+                  <dd className="font-medium text-foreground">
+                    {(delivery?.delivery as { assigned_name?: string | null } | null)
+                      ?.assigned_name ?? "Unassigned"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Expected delivery date</dt>
+                  <dd className="font-medium text-foreground">
+                    {(delivery?.delivery as { expected_delivery_date?: string | null } | null)
+                      ?.expected_delivery_date ?? "Not set"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Dispatched</dt>
+                  <dd className="font-medium text-foreground">
+                    {(delivery?.delivery as { dispatched_at?: string | null } | null)
+                      ?.dispatched_at ?? "Not dispatched"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Delivered</dt>
+                  <dd className="font-medium text-foreground">
+                    {(delivery?.delivery as { delivered_at?: string | null } | null)
+                      ?.delivered_at ?? "Not delivered"}
+                  </dd>
+                </div>
+              </dl>
+
+              {(delivery?.delivery as { delivery_notes?: string | null } | null)
+                ?.delivery_notes && (
+                <div>
+                  <p className="text-muted-foreground">Delivery notes</p>
+                  <p className="text-xs text-foreground whitespace-pre-wrap">
+                    {(delivery?.delivery as { delivery_notes: string }).delivery_notes}
+                  </p>
+                </div>
+              )}
+
+              {(delivery?.delivery as { confirmation_name?: string | null } | null)
+                ?.confirmation_name && (
+                <div>
+                  <p className="text-muted-foreground">Delivery confirmation</p>
+                  <p className="text-xs text-foreground">
+                    Received by{" "}
+                    {(delivery?.delivery as { confirmation_name: string }).confirmation_name}
+                    {(delivery?.delivery as { confirmation_details?: string | null })
+                      .confirmation_details
+                      ? ` — ${
+                          (delivery?.delivery as { confirmation_details: string })
+                            .confirmation_details
+                        }`
+                      : ""}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                {order.status !== "Delivered" &&
+                  order.status !== "Cancelled" &&
+                  !(delivery?.delivery as { dispatched_at?: string | null } | null)
+                    ?.dispatched_at && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-8"
+                      disabled={statusUpdating}
+                      onClick={() => onDispatch?.(order.order_id)}
+                    >
+                      <Truck className="mr-1.5 h-3.5 w-3.5" />
+                      Mark dispatched
+                    </Button>
+                  )}
+                {order.status === "Out for Delivery" && onCompleteDelivery && (
+                  <Button
+                    size="sm"
+                    className="text-xs h-8"
+                    disabled={statusUpdating}
+                    onClick={() => onCompleteDelivery(order.order_id)}
+                  >
+                    <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+                    Confirm delivery
+                  </Button>
+                )}
+              </div>
             </div>
           )}
 
@@ -293,7 +733,7 @@ export function OrderDrawer({
                 </p>
               ) : (
                 <div className="divide-y divide-border/50">
-                  {(statusHistory as any[]).map((entry, idx) => (
+                  {(statusHistory ?? []).map((entry) => (
                     <div key={entry.id} className="py-2 flex flex-col gap-1">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
@@ -319,11 +759,25 @@ export function OrderDrawer({
 
         {/* Footer Actions */}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-          {mode === "customer" && onReorder && (
-            <Button onClick={() => onReorder(order)} className="w-full gap-2 sm:w-auto">
-              <RotateCcw className="h-4 w-4" />
-              Reorder Items
-            </Button>
+          {mode === "customer" && (
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              {onReorder && (
+                <Button onClick={() => onReorder(order)} className="gap-2">
+                  <RotateCcw className="h-4 w-4" />
+                  Reorder Items
+                </Button>
+              )}
+              {onCancel && order.status === "Pending" && (
+                <Button
+                  variant="outline"
+                  onClick={() => onCancel(order)}
+                  className="gap-2 text-destructive border-destructive/20 hover:bg-destructive/10"
+                >
+                  <XCircle className="h-4 w-4" />
+                  Cancel Order
+                </Button>
+              )}
+            </div>
           )}
 
           {mode === "admin" && onStatusChange && (

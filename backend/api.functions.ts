@@ -7,20 +7,28 @@ import {
 } from "@tanstack/react-start/server";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
+import type mysql from "mysql2/promise";
 import { withDb, rows } from "./db.server";
 import {
   currentUser,
   endSession,
+  endOrderSession,
   loadUser,
+  orderSessionOrderId,
   requireAdmin,
   requirePermission,
   requireUser,
+  startOrderSession,
   startSession,
   issueTokenPair,
   revokeRefreshToken,
   rotateRefreshToken,
 } from "./session.server";
+import { rateLimit, resetRateLimit } from "../utils/rate-limit";
+import { isMessageLengthValid, preview, sanitizeMessage } from "../utils/sanitize";
+import { isEmailMatch, parseOrderId } from "../shared/order-access";
+import { InvalidTransitionError, canTransition, nextStatuses } from "../shared/order-status";
 import type {
   Category,
   Order,
@@ -96,16 +104,34 @@ function getUserAgent(): string {
 
 // ---------- catalog ----------
 export const getProducts = createServerFn({ method: "GET" }).handler(async () =>
-  withDb((c) => rows<Product>(c, `${PUBLIC_PRODUCT_SQL} ORDER BY p.product_id`)),
+  withDb(async (c) => {
+    try {
+      return await rows<Product>(
+        c,
+        `${PRODUCT_SQL} WHERE (p.status = 'active' OR p.status IS NULL) AND p.deleted_at IS NULL ORDER BY p.product_id`,
+      );
+    } catch {
+      return await rows<Product>(c, `${PRODUCT_SQL} ORDER BY p.product_id`);
+    }
+  }),
 );
 
 export const getProduct = createServerFn({ method: "POST" })
   .validator((d) => z.object({ id: z.coerce.number().int() }).parse(d))
   .handler(async ({ data }) =>
-    withDb(
-      async (c) =>
-        (await rows<Product>(c, `${PUBLIC_PRODUCT_SQL} AND p.product_id=?`, [data.id]))[0] ?? null,
-    ),
+    withDb(async (c) => {
+      try {
+        const [p] = await rows<Product>(
+          c,
+          `${PRODUCT_SQL} WHERE p.product_id=? AND (p.status = 'active' OR p.status IS NULL) AND p.deleted_at IS NULL`,
+          [data.id],
+        );
+        return p ?? null;
+      } catch {
+        const [p] = await rows<Product>(c, `${PRODUCT_SQL} WHERE p.product_id=?`, [data.id]);
+        return p ?? null;
+      }
+    }),
   );
 
 // ---------- product images (served from database BLOBs) ----------
@@ -218,6 +244,15 @@ export const login = createServerFn({ method: "POST" })
       return { error: "Invalid email or password." };
     }
 
+    const userRole = await withDb((c) =>
+      rows<{ role: string }>(c, "SELECT role FROM users WHERE user_id=?", [user.user_id]),
+    );
+
+    if (!userRole[0] || userRole[0].role === "customer") {
+      recordIpAttempt(ip);
+      return { error: "Access denied. Please contact an administrator." };
+    }
+
     // Success: reset counters
     resetIpAttempts(ip);
     try {
@@ -236,46 +271,49 @@ export const login = createServerFn({ method: "POST" })
     return { user: await loadUser(user.user_id) };
   });
 
-export const register = createServerFn({ method: "POST" })
+export const changeTemporaryPassword = createServerFn({ method: "POST" })
   .validator((d) =>
     z
       .object({
-        name: z.string().trim().min(1).max(100),
-        email: z.string().trim().email().max(255),
-        phone: z.string().trim().max(20),
-        password: z
-          .string()
-          .min(8, "Password must be at least 8 characters")
-          .max(200)
-          .refine((v) => /[a-zA-Z]/.test(v), "Password must contain at least one letter")
-          .refine((v) => /[0-9]/.test(v), "Password must contain at least one number"),
-        // role is IGNORED — always forced to 'customer' server-side
-        role: z.string().optional(),
+        temporaryPassword: z.string().min(1, "Temporary password is required").max(200),
+        newPassword: z.string().min(6, "New password must be at least 6 characters").max(200),
       })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    const hash = await bcrypt.hash(data.password, 12);
-    const uid = await withDb(async (c) => {
-      const exists = await rows(c, "SELECT 1 FROM users WHERE email=?", [data.email.toLowerCase()]);
-      if (exists.length) return null;
-      // Public register ALWAYS forces role='customer' regardless of what the
-      // client sent. The role field in the validator is accepted but silently dropped.
-      const [r] = await c.execute(
-        "INSERT INTO users (name,email,phone,password_hash,role,must_change_password) VALUES (?,?,?,?,'customer',0)",
-        [data.name, data.email.toLowerCase(), data.phone, hash],
-      );
-      const id = (r as { insertId: number }).insertId;
-      await c.execute(
-        "INSERT INTO user_roles (user_id,role) VALUES (?, 'customer') ON DUPLICATE KEY UPDATE role='customer'",
-        [id],
-      );
-      return id;
+    // Use currentUser() directly — this is the ONE endpoint allowed when
+    // must_change_password=true. requireUser() would block it.
+    const u = await currentUser();
+    if (!u) throw Object.assign(new Error("Please sign in first."), { status: 401 });
+    const found = await withDb((c) =>
+      rows<{ password_hash: string }>(c, "SELECT password_hash FROM users WHERE user_id=?", [
+        u.user_id,
+      ]),
+    );
+    if (!found[0] || !(await bcrypt.compare(data.temporaryPassword, found[0].password_hash))) {
+      throw new Error("Current temporary password does not match.");
+    }
+    if (data.temporaryPassword === data.newPassword) {
+      throw new Error("New password must be different from your temporary password.");
+    }
+    const newHash = await bcrypt.hash(data.newPassword, 12);
+    await withDb((c) =>
+      c.execute("UPDATE users SET password_hash=?, must_change_password=0 WHERE user_id=?", [
+        newHash,
+        u.user_id,
+      ]),
+    );
+    await logAction(null, "CHANGE_TEMPORARY_PASSWORD", "user", u.user_id, null, {
+      must_change_password: false,
     });
-    if (!uid) return { error: "An account with this email already exists." };
-    startSession(uid);
-    await issueTokenPair(uid, getUserAgent());
-    return { user: await loadUser(uid) };
+    await notify(
+      u.user_id,
+      "security",
+      "Temporary Password Updated",
+      "Your temporary password has been successfully updated. Welcome to Polar Fiber!",
+      "/admin",
+    );
+    return { ok: true, user: await loadUser(u.user_id) };
   });
 
 export const logout = createServerFn({ method: "POST" }).handler(async () => {
@@ -310,79 +348,13 @@ export const refreshTokens = createServerFn({ method: "POST" }).handler(async ()
   return { ok: true };
 });
 
-export const forgotPassword = createServerFn({ method: "POST" })
-  .validator((d) => z.object({ email: z.string().email() }).parse(d))
-  .handler(async ({ data }) => {
-    const found = await withDb((c) =>
-      rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
-        data.email.toLowerCase(),
-      ]),
-    );
-    const userRecord = found[0];
-    if (userRecord) {
-      const plainToken = randomBytes(32).toString("hex");
-      const tokenHash = createHash("sha256").update(plainToken).digest("hex");
-      await withDb((c) =>
-        c.execute(
-          "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 MINUTE))",
-          [userRecord.user_id, tokenHash],
-        ),
-      );
-      // TODO: send plainToken via email transport.
-      // The token is intentionally NOT logged — logging it would be a security
-      // vulnerability. Wire up an email provider (e.g. nodemailer, Resend) and
-      // send the reset link: /reset-password?token=<plainToken>
-    }
-    return { ok: true };
-  });
-
-export const resetPassword = createServerFn({ method: "POST" })
-  .validator((d) =>
-    z
-      .object({
-        token: z.string(),
-        password: z
-          .string()
-          .min(8, "Password must be at least 8 characters")
-          .max(200)
-          .refine((v) => /[a-zA-Z]/.test(v), "Password must contain at least one letter")
-          .refine((v) => /[0-9]/.test(v), "Password must contain at least one number"),
-      })
-      .parse(d),
-  )
-  .handler(async ({ data }) => {
-    const tokenHash = createHash("sha256").update(data.token).digest("hex");
-    const found = await withDb((c) =>
-      rows<{ id: number; user_id: number }>(
-        c,
-        "SELECT id,user_id FROM password_reset_tokens WHERE token_hash=? AND used_at IS NULL AND expires_at > NOW()",
-        [tokenHash],
-      ),
-    );
-    const resetRecord = found[0];
-    if (!resetRecord) return { error: "This reset link is invalid or has expired." };
-
-    const newHash = await bcrypt.hash(data.password, 12);
-    await withDb(async (c) => {
-      await c.execute("UPDATE users SET password_hash=? WHERE user_id=?", [
-        newHash,
-        resetRecord.user_id,
-      ]);
-      await c.execute("UPDATE password_reset_tokens SET used_at=NOW() WHERE id=?", [
-        resetRecord.id,
-      ]);
-      await c.execute("DELETE FROM refresh_tokens WHERE user_id=?", [resetRecord.user_id]);
-    });
-    return { ok: true };
-  });
-
 // ---------- orders & quotes ----------
 async function loadOrders(where: string, params: unknown[]): Promise<Order[]> {
   return withDb(async (c) => {
     const os = await rows<Omit<Order, "items"> & { customer: string }>(
       c,
       `SELECT o.order_id,o.user_id,o.total,o.status,o.address,o.is_paid,o.payment_method,o.internal_notes,DATE(o.created_at) created_at,u.name customer
-       FROM orders o JOIN users u ON u.user_id=o.user_id ${where} ORDER BY o.order_id DESC`,
+        FROM orders o LEFT JOIN users u ON u.user_id=o.user_id ${where} ORDER BY o.order_id DESC`,
       params,
     );
     if (!os.length) return [];
@@ -451,20 +423,29 @@ export const placeOrder = createServerFn({ method: "POST" })
           )
           .min(1)
           .max(50),
+        name: z.string().trim().min(1).max(100).optional(),
+        email: z.string().email().optional(),
+        phone: z.string().trim().min(1).max(30).optional(),
+        access_password: z.string().trim().min(6).max(100).optional(),
       })
       .parse(d),
   )
   .handler(async ({ data }) => {
-    const u = await requireUser();
+    const u = await currentUser();
+    const isGuest = !u;
+
+    if (isGuest) {
+      if (!data.name || !data.email || !data.phone || !data.access_password) {
+        throw new Error("Guest checkout requires name, email, phone, and access password.");
+      }
+    }
+
     return withDb(async (c) => {
-      // Sort unique product IDs to guarantee consistent row lock ordering and prevent deadlocks
       const ids = [...new Set(data.items.map((i) => i.product_id))].sort((a, b) => a - b);
       if (!ids.length) throw new Error("Order must contain at least one item.");
 
       await c.beginTransaction();
       try {
-        // Prices always come from the database using SELECT ... FOR UPDATE
-        // Stock sufficiency is verified inside changeStock() under its own lock.
         const ps = await rows<{ product_id: number; name: string; price: number; stock: number }>(
           c,
           `SELECT product_id, name, price, stock FROM products WHERE product_id IN (${ids.map(() => "?").join(",")}) ORDER BY product_id FOR UPDATE`,
@@ -483,11 +464,26 @@ export const placeOrder = createServerFn({ method: "POST" })
         const total = lines.reduce((t, l) => t + l.p.price * l.quantity, 0);
 
         const [r] = await c.execute("INSERT INTO orders (user_id,total,address) VALUES (?,?,?)", [
-          u.user_id,
+          u?.user_id ?? null,
           total,
           data.address,
         ]);
         const oid = (r as { insertId: number }).insertId;
+
+        // order_number must be backfilled after the insert: MySQL cannot derive it
+        // from the AUTO_INCREMENT id at INSERT time, and the column has no default.
+        await c.execute("UPDATE orders SET order_number=? WHERE order_id=?", [
+          `PF-ORD-${oid}`,
+          oid,
+        ]);
+
+        if (isGuest) {
+          const hashedPass = await bcrypt.hash(data.access_password!, 12);
+          await c.execute(
+            "INSERT INTO order_access (order_id, access_pass, email) VALUES (?,?,?)",
+            [oid, hashedPass, data.email!],
+          );
+        }
 
         for (const l of lines) {
           await c.execute(
@@ -495,7 +491,6 @@ export const placeOrder = createServerFn({ method: "POST" })
             [oid, l.product_id, l.p.name, l.quantity, l.p.price],
           );
 
-          // Deduct stock via shared helper (locks row, blocks negative, records movement)
           await changeStock(
             c,
             l.product_id,
@@ -503,17 +498,535 @@ export const placeOrder = createServerFn({ method: "POST" })
             `Order #${oid} placed`,
             "order",
             oid,
-            u.user_id,
+            u?.user_id ?? null,
           );
         }
 
         await c.commit();
+
+        if (isGuest) {
+          const { sendOrderConfirmation } = await import("./email");
+          await sendOrderConfirmation(data.email!, data.name!, oid, total, data.access_password!);
+        }
+
         return { order_id: oid };
       } catch (e) {
         await c.rollback().catch(() => {});
         throw e;
       }
     });
+  });
+
+export const getOrderStatusPublic = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        order_id: z.number().int().min(1),
+        access_password: z.string().min(1),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    return withDb(async (c) => {
+      const [oa] = await rows<{ order_id: number; access_pass: string }>(
+        c,
+        "SELECT order_id, access_pass FROM order_access WHERE order_id = ?",
+        [data.order_id],
+      );
+
+      if (!oa) throw new Error("Order not found.");
+
+      const valid = await bcrypt.compare(data.access_password, oa.access_pass);
+      if (!valid) throw new Error("Invalid access password.");
+
+      const [o] = await rows<Omit<Order, "items"> & { status: OrderStatus }>(
+        c,
+        // Explicit columns only: internal_notes must never reach a guest, and
+        // order_status_history (not order_status_log) is the real table.
+        `SELECT o.order_id, o.user_id, o.total, o.status, o.address, o.is_paid,
+                o.payment_method, DATE(o.created_at) created_at,
+                o.customer_name, o.customer_phone
+         FROM orders o WHERE o.order_id = ?`,
+        [data.order_id],
+      );
+
+      if (!o) throw new Error("Order not found.");
+
+      const items = await rows<{
+        product_id: number;
+        product_name: string;
+        quantity: number;
+        unit_price: number;
+      }>(
+        c,
+        "SELECT product_id, product_name, quantity, unit_price FROM order_items WHERE order_id = ?",
+        [data.order_id],
+      );
+
+      return { order: { ...o, items } };
+    });
+  });
+
+// ─── order communication (customer ↔ staff) ──────────────────────────────────
+
+const MESSAGE_SELECT = `SELECT m.id, m.sender_type, m.sender_user_id, m.sender_name, m.kind,
+      m.body, m.status_from, m.status_to,
+      DATE_FORMAT(m.created_at, '%Y-%m-%d %H:%i') created_at
+   FROM order_messages m`;
+
+interface OrderContact {
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string;
+  user_id: number | null;
+}
+
+async function loadOrderContact(
+  c: mysql.Connection,
+  orderId: number,
+): Promise<OrderContact | null> {
+  const [o] = await rows<{
+    user_id: number | null;
+    customer_name: string | null;
+    customer_phone: string | null;
+    address: string;
+  }>(c, "SELECT user_id, customer_name, customer_phone, address FROM orders WHERE order_id = ?", [
+    orderId,
+  ]);
+  if (!o) return null;
+
+  let name = o.customer_name ?? null;
+  let email: string | null = null;
+  let phone = o.customer_phone ?? null;
+
+  if (o.user_id) {
+    const [u] = await rows<{ name: string; email: string; phone: string }>(
+      c,
+      "SELECT name, email, phone FROM users WHERE user_id = ?",
+      [o.user_id],
+    );
+    if (u) {
+      name = u.name;
+      email = u.email;
+      phone = u.phone || phone;
+    }
+  } else {
+    const [oa] = await rows<{ email: string }>(
+      c,
+      "SELECT email FROM order_access WHERE order_id = ?",
+      [orderId],
+    );
+    email = oa?.email ?? null;
+  }
+
+  return { name, email, phone, address: o.address, user_id: o.user_id };
+}
+
+/**
+ * Writes a customer-visible entry into the order thread. Never accepts staff
+ * internal notes — only explicitly customer-facing text.
+ */
+async function pushCustomerOrderUpdate(
+  c: mysql.Connection,
+  orderId: number,
+  kind: "message" | "status" | "delivery",
+  body: string | null,
+  statusFrom: string | null = null,
+  statusTo: string | null = null,
+): Promise<number> {
+  const [r] = await c.execute(
+    `INSERT INTO order_messages (order_id, sender_type, sender_name, kind, body, status_from, status_to, is_read_by_customer, is_read_by_staff)
+     VALUES (?, 'system', 'system', ?, ?, ?, ?, 0, 1)`,
+    [orderId, kind, body, statusFrom, statusTo],
+  );
+  return (r as { insertId: number }).insertId;
+}
+
+/**
+ * Emails the customer about an order event. Works for guests because it uses
+ * the order's own contact email rather than a user id.
+ */
+async function emailOrderCustomer(orderId: number, newStatus: string): Promise<void> {
+  try {
+    const contact = await withDb((c) => loadOrderContact(c, orderId));
+    if (!contact?.email) return;
+    const { sendOrderStatusEmail } = await import("./email");
+    await sendOrderStatusEmail(contact.email, contact.name ?? "Customer", orderId, newStatus, 0);
+  } catch (err) {
+    console.error("[emailOrderCustomer] Failed:", err);
+  }
+}
+
+async function requireOrderSession(): Promise<number> {
+  const oid = orderSessionOrderId();
+  if (!oid) {
+    throw Object.assign(new Error("Please verify your order first."), { status: 401 });
+  }
+  return oid;
+}
+
+/** Throws 403 unless the caller's order-scoped session is for this order. */
+function assertOrderOwnership(sessionOrderId: number, orderId: number): void {
+  if (sessionOrderId !== orderId) {
+    throw Object.assign(new Error("You can only access the order you verified."), {
+      status: 403,
+    });
+  }
+}
+
+export const verifyOrderAccess = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        order_number: z.union([z.string().min(1).max(30), z.number().int().min(1)]),
+        email: z.string().trim().email().max(255),
+        access_password: z.string().min(1).max(200),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const ip = getClientIp();
+    const parsedId = parseOrderId(data.order_number);
+    const attemptKey = `order-verify:${ip}:${parsedId ?? "unknown"}`;
+
+    const rl = rateLimit(attemptKey, 5, 15 * 60 * 1000);
+    if (!rl.ok) {
+      throw Object.assign(new Error("Too many attempts. Please wait 15 minutes and try again."), {
+        status: 429,
+      });
+    }
+
+    const result = await withDb(async (c) => {
+      // Accepts "1009" or "PF-ORD-1009"
+      const [order] = parsedId
+        ? await rows<{ order_id: number }>(c, "SELECT order_id FROM orders WHERE order_id = ?", [
+            parsedId,
+          ])
+        : [];
+
+      const [oa] = order
+        ? await rows<{ access_pass: string; email: string }>(
+            c,
+            "SELECT access_pass, email FROM order_access WHERE order_id = ?",
+            [order.order_id],
+          )
+        : [];
+
+      // One identical error for every failure mode: never reveal whether the
+      // order number, the email or the password was the wrong part.
+      if (!order || !oa || !isEmailMatch(oa.email, data.email)) {
+        return { failed: true as const };
+      }
+
+      const valid = await bcrypt.compare(data.access_password, oa.access_pass);
+      if (!valid) return { failed: true as const };
+
+      startOrderSession(order.order_id);
+      resetRateLimit(attemptKey);
+      await logAction(null, "VERIFY_ORDER_ACCESS", "order", order.order_id, null, null);
+      return { failed: false as const, order_id: order.order_id };
+    });
+
+    if (result.failed) {
+      throw new Error("Order not found. Check your order number, email and password.");
+    }
+    return { ok: true, order_id: result.order_id };
+  });
+
+export const endOrderAccess = createServerFn({ method: "POST" }).handler(() => {
+  endOrderSession();
+  return { ok: true };
+});
+
+/** Staff/admin view of a conversation thread for one order. */
+export const getOrderMessages = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ order_id: z.number().int().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("orders.view");
+    return withDb(async (c) => {
+      const contact = await loadOrderContact(c, data.order_id);
+      if (!contact) throw new Error("Order not found.");
+
+      const messages = await rows<{
+        id: number;
+        sender_type: string;
+        sender_user_id: number | null;
+        sender_name: string;
+        kind: string;
+        body: string | null;
+        status_from: string | null;
+        status_to: string | null;
+        created_at: string;
+      }>(c, `${MESSAGE_SELECT} WHERE m.order_id = ? ORDER BY m.id ASC`, [data.order_id]);
+
+      await c.execute(
+        "UPDATE order_messages SET is_read_by_staff = 1 WHERE order_id = ? AND sender_type = 'customer'",
+        [data.order_id],
+      );
+
+      return { order_id: data.order_id, messages, customer: contact };
+    });
+  });
+
+/** Staff/admin reply that appears on the customer's tracking page. */
+export const sendOrderMessage = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        order_id: z.number().int().min(1),
+        message: z.unknown(),
+        client_message_id: z.string().trim().min(1).max(64).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requirePermission("orders.update_status");
+
+    const body = sanitizeMessage(data.message);
+    if (!isMessageLengthValid(body)) {
+      throw new Error("Message must be between 1 and 2000 characters.");
+    }
+
+    const rl = rateLimit(`order-msg-staff:${u.user_id}:${data.order_id}`, 20, 5 * 60 * 1000);
+    if (!rl.ok) {
+      throw Object.assign(new Error("Too many messages. Please wait a minute."), { status: 429 });
+    }
+
+    return withDb(async (c) => {
+      if (data.client_message_id) {
+        const [existing] = await rows<{ id: number }>(
+          c,
+          "SELECT id FROM order_messages WHERE client_message_id = ?",
+          [data.client_message_id],
+        );
+        if (existing) return { id: existing.id, duplicate: true };
+      }
+
+      const contact = await loadOrderContact(c, data.order_id);
+      if (!contact) throw new Error("Order not found.");
+
+      const [r] = await c.execute(
+        `INSERT INTO order_messages
+           (order_id, sender_type, sender_user_id, sender_name, kind, body, client_message_id, is_read_by_customer)
+         VALUES (?, ?, ?, ?, 'message', ?, ?, 0)`,
+        [data.order_id, u.role, u.user_id, u.name, body, data.client_message_id ?? null],
+      );
+      const id = (r as { insertId: number }).insertId;
+
+      // Guests have no notifications row (notifications.user_id is NOT NULL),
+      // so the customer is reached by email; registered buyers also get the
+      // in-app notification. Email failure never fails the reply.
+      if (contact.email) {
+        const { sendMessageNotificationEmail } = await import("./email");
+        await sendMessageNotificationEmail(
+          contact.email,
+          contact.name ?? "Customer",
+          `Order #${data.order_id} - new message from Polar Fiber`,
+          preview(body),
+          "https://polarfiber.com.et/track-order",
+        ).catch((err) => {
+          console.error("[sendOrderMessage] Customer email failed:", err);
+        });
+      }
+
+      if (contact.user_id) {
+        await notify(
+          contact.user_id,
+          "customer_message",
+          `New message on Order #${data.order_id}`,
+          body,
+          "/track-order",
+          { dedupeKey: `order-message:${id}` },
+        );
+      }
+
+      await logAction(null, "STAFF_ORDER_MESSAGE", "order", data.order_id, null, {
+        message_id: id,
+      });
+      return { id, duplicate: false };
+    });
+  });
+
+/** Guest thread, readable only with this order's verified session. */
+export const getGuestOrderThread = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ order_id: z.number().int().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    const sessionOrderId = await requireOrderSession();
+    assertOrderOwnership(sessionOrderId, data.order_id);
+
+    return withDb(async (c) => {
+      const messages = await rows<{
+        id: number;
+        sender_type: string;
+        sender_name: string;
+        kind: string;
+        body: string | null;
+        status_from: string | null;
+        status_to: string | null;
+        created_at: string;
+      }>(c, `${MESSAGE_SELECT} WHERE m.order_id = ? ORDER BY m.id ASC`, [data.order_id]);
+
+      await c.execute(
+        "UPDATE order_messages SET is_read_by_customer = 1 WHERE order_id = ? AND sender_type <> 'customer'",
+        [data.order_id],
+      );
+
+      const [oauth] = await rows<{ email: string }>(
+        c,
+        "SELECT email FROM order_access WHERE order_id = ?",
+        [data.order_id],
+      );
+
+      return { order_id: data.order_id, messages, email: oauth?.email ?? null };
+    });
+  });
+
+/** Guest reply from the tracking page, no account required. */
+export const sendGuestOrderMessage = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        order_id: z.number().int().min(1),
+        message: z.unknown(),
+        client_message_id: z.string().trim().min(1).max(64).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const sessionOrderId = await requireOrderSession();
+    assertOrderOwnership(sessionOrderId, data.order_id);
+
+    const body = sanitizeMessage(data.message);
+    if (!isMessageLengthValid(body)) {
+      throw new Error("Message must be between 1 and 2000 characters.");
+    }
+
+    const rl = rateLimit(`order-msg-guest:${data.order_id}`, 10, 10 * 60 * 1000);
+    if (!rl.ok) {
+      throw Object.assign(
+        new Error("You're sending messages too quickly. Please try again in a few minutes."),
+        { status: 429 },
+      );
+    }
+
+    return withDb(async (c) => {
+      if (data.client_message_id) {
+        const [existing] = await rows<{ id: number }>(
+          c,
+          "SELECT id FROM order_messages WHERE client_message_id = ?",
+          [data.client_message_id],
+        );
+        if (existing) return { id: existing.id, duplicate: true };
+      }
+
+      const contact = await loadOrderContact(c, data.order_id);
+      if (!contact) throw new Error("Order not found.");
+
+      const [r] = await c.execute(
+        `INSERT INTO order_messages
+           (order_id, sender_type, sender_user_id, sender_name, kind, body, client_message_id, is_read_by_staff)
+         VALUES (?, 'customer', NULL, ?, 'message', ?, ?, 0)`,
+        [data.order_id, contact.name ?? "Customer", body, data.client_message_id ?? null],
+      );
+      const id = (r as { insertId: number }).insertId;
+
+      const recipients = await rows<{ user_id: number }>(
+        c,
+        "SELECT user_id FROM users WHERE role IN ('admin','staff') AND COALESCE(is_active,1)=1",
+      );
+      for (const rec of recipients) {
+        // Per-recipient key: a shared key would let the first recipient
+        // suppress everyone else's notification.
+        await notify(
+          rec.user_id,
+          "customer_message",
+          `New message on Order #${data.order_id}`,
+          `${contact.name ?? "A customer"}: ${preview(body, 200)}`,
+          "/admin",
+          { dedupeKey: `order-message:${id}:${rec.user_id}` },
+        );
+      }
+
+      await logAction(null, "CUSTOMER_ORDER_MESSAGE", "order", data.order_id, null, {
+        message_id: id,
+      });
+      return { id, duplicate: false };
+    });
+  });
+
+/** Internal staff notes — never returned by any guest/public endpoint. */
+export const getOrderInternalNotes = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ order_id: z.number().int().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("orders.view");
+    return withDb((c) =>
+      rows<{
+        id: number;
+        staff_id: number | null;
+        staff_name: string;
+        note: string;
+        created_at: string;
+      }>(
+        c,
+        `SELECT n.id, n.staff_id, n.staff_name, n.note,
+                DATE_FORMAT(n.created_at, '%Y-%m-%d %H:%i') created_at
+         FROM order_internal_notes n WHERE n.order_id = ? ORDER BY n.id DESC`,
+        [data.order_id],
+      ),
+    );
+  });
+
+export const addOrderInternalNote = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        order_id: z.number().int().min(1),
+        note: z.unknown(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requirePermission("orders.add_note");
+
+    const note = sanitizeMessage(data.note);
+    if (!isMessageLengthValid(note)) {
+      throw new Error("Note must be between 1 and 2000 characters.");
+    }
+
+    const rl = rateLimit(`order-note:${u.user_id}:${data.order_id}`, 20, 5 * 60 * 1000);
+    if (!rl.ok) {
+      throw Object.assign(new Error("Too many notes. Please wait a minute."), { status: 429 });
+    }
+
+    const id = await withDb(async (c) => {
+      const [r] = await c.execute(
+        "INSERT INTO order_internal_notes (order_id, staff_id, staff_name, note) VALUES (?, ?, ?, ?)",
+        [data.order_id, u.user_id, u.name, note],
+      );
+
+      // Keep the legacy orders.internal_notes blob in sync so older UI and
+      // any external readers still see the note.
+      const [row] = await rows<{ internal_notes: string | null }>(
+        c,
+        "SELECT internal_notes FROM orders WHERE order_id = ?",
+        [data.order_id],
+      );
+      const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+      const entry = `[${stamp} - ${u.name}]: ${note}`;
+      const merged = row?.internal_notes ? `${row.internal_notes}\n${entry}` : entry;
+      await c.execute("UPDATE orders SET internal_notes = ? WHERE order_id = ?", [
+        merged,
+        data.order_id,
+      ]);
+
+      return (r as { insertId: number }).insertId;
+    });
+
+    await logAction(null, "ADD_ORDER_INTERNAL_NOTE", "order", data.order_id, null, {
+      note_id: id,
+    });
+    return { ok: true, id };
   });
 
 export const submitQuote = createServerFn({ method: "POST" })
@@ -540,170 +1053,6 @@ export const submitQuote = createServerFn({ method: "POST" })
 
 const QUOTE_SQL =
   "SELECT quote_id,user_id,name,email,phone,subject,message,delivery_location,quoted_amount,valid_until,assigned_to,status,DATE(created_at) created_at FROM quote_requests";
-
-export const getMyAccount = createServerFn({ method: "GET" }).handler(async () => {
-  const u = await requireUser();
-  const orders = await loadOrders("WHERE o.user_id=?", [u.user_id]);
-  const quotes = await withDb((c) =>
-    rows<Quote>(c, `${QUOTE_SQL} WHERE user_id=? OR email=? ORDER BY quote_id DESC`, [
-      u.user_id,
-      u.email,
-    ]),
-  );
-  return { orders, quotes };
-});
-
-export const getMyDashboard = createServerFn({ method: "GET" }).handler(async () => {
-  const u = await requireUser();
-  const recentOrders = await loadOrders("WHERE o.user_id=? LIMIT 5", [u.user_id]);
-  return withDb(async (c) => {
-    const [orderStats] = await rows<{
-      active_orders: number;
-      delivered_orders: number;
-    }>(
-      c,
-      `SELECT
-        COUNT(CASE WHEN status IN ('Pending', 'Confirmed', 'In Production') THEN 1 END) as active_orders,
-        COUNT(CASE WHEN status = 'Delivered' THEN 1 END) as delivered_orders
-       FROM orders WHERE user_id=?`,
-      [u.user_id],
-    );
-
-    const [quoteStats] = await rows<{ open_quotes: number }>(
-      c,
-      `SELECT COUNT(*) as open_quotes FROM quote_requests WHERE (user_id=? OR email=?) AND status='New'`,
-      [u.user_id, u.email],
-    );
-
-    return {
-      stats: {
-        activeOrders: Number(orderStats?.active_orders ?? 0),
-        deliveredOrders: Number(orderStats?.delivered_orders ?? 0),
-        openQuotes: Number(quoteStats?.open_quotes ?? 0),
-      },
-      recentOrders,
-    };
-  });
-});
-
-export const getMyOrders = createServerFn({ method: "GET" }).handler(async () => {
-  const u = await requireUser();
-  return loadOrders("WHERE o.user_id=?", [u.user_id]);
-});
-
-export const getMyQuotes = createServerFn({ method: "GET" }).handler(async () => {
-  const u = await requireUser();
-  return withDb((c) =>
-    rows<Quote>(c, `${QUOTE_SQL} WHERE user_id=? OR email=? ORDER BY quote_id DESC`, [
-      u.user_id,
-      u.email,
-    ]),
-  );
-});
-
-export const updateMyProfile = createServerFn({ method: "POST" })
-  .validator((d) =>
-    z
-      .object({
-        name: z.string().trim().min(1, "Name cannot be empty").max(100),
-        phone: z.string().trim().max(20),
-      })
-      .parse(d),
-  )
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    await withDb((c) =>
-      c.execute("UPDATE users SET name=?, phone=? WHERE user_id=?", [
-        data.name,
-        data.phone,
-        u.user_id,
-      ]),
-    );
-    const updatedUser = await loadUser(u.user_id);
-    return { user: updatedUser };
-  });
-
-export const changeMyPassword = createServerFn({ method: "POST" })
-  .validator((d) =>
-    z
-      .object({
-        currentPassword: z.string().min(1, "Current password is required").max(200),
-        newPassword: z.string().min(6, "New password must be at least 6 characters").max(200),
-      })
-      .parse(d),
-  )
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    const found = await withDb((c) =>
-      rows<{ password_hash: string }>(c, "SELECT password_hash FROM users WHERE user_id=?", [
-        u.user_id,
-      ]),
-    );
-    if (!found[0] || !(await bcrypt.compare(data.currentPassword, found[0].password_hash))) {
-      throw new Error("Current password does not match.");
-    }
-    const newHash = await bcrypt.hash(data.newPassword, 12);
-    await withDb((c) =>
-      c.execute("UPDATE users SET password_hash=?, must_change_password=0 WHERE user_id=?", [
-        newHash,
-        u.user_id,
-      ]),
-    );
-    await logAction(null, "CHANGE_PASSWORD", "user", u.user_id, null, { updated: true });
-    await notify(
-      u.user_id,
-      "security",
-      "Password Changed",
-      "Your account password has been updated.",
-      u.role === "customer" ? "/account" : "/admin",
-    );
-    return { ok: true, user: await loadUser(u.user_id) };
-  });
-
-export const changeTemporaryPassword = createServerFn({ method: "POST" })
-  .validator((d) =>
-    z
-      .object({
-        temporaryPassword: z.string().min(1, "Temporary password is required").max(200),
-        newPassword: z.string().min(6, "New password must be at least 6 characters").max(200),
-      })
-      .parse(d),
-  )
-  .handler(async ({ data }) => {
-    // Use currentUser() directly — this is the ONE endpoint allowed when
-    // must_change_password=true. requireUser() would block it.
-    const u = await currentUser();
-    if (!u) throw Object.assign(new Error("Please sign in first."), { status: 401 });
-    const found = await withDb((c) =>
-      rows<{ password_hash: string }>(c, "SELECT password_hash FROM users WHERE user_id=?", [
-        u.user_id,
-      ]),
-    );
-    if (!found[0] || !(await bcrypt.compare(data.temporaryPassword, found[0].password_hash))) {
-      throw new Error("Current temporary password does not match.");
-    }
-    if (data.temporaryPassword === data.newPassword) {
-      throw new Error("New password must be different from your temporary password.");
-    }
-    const newHash = await bcrypt.hash(data.newPassword, 12);
-    await withDb((c) =>
-      c.execute("UPDATE users SET password_hash=?, must_change_password=0 WHERE user_id=?", [
-        newHash,
-        u.user_id,
-      ]),
-    );
-    await logAction(null, "CHANGE_TEMPORARY_PASSWORD", "user", u.user_id, null, {
-      must_change_password: false,
-    });
-    await notify(
-      u.user_id,
-      "security",
-      "Temporary Password Updated",
-      "Your temporary password has been successfully updated. Welcome to Polar Fiber!",
-      u.role === "customer" ? "/account" : "/admin",
-    );
-    return { ok: true, user: await loadUser(u.user_id) };
-  });
 
 // ---------- admin & staff ----------
 export const getAdminData = createServerFn({ method: "GET" }).handler(async () => {
@@ -908,14 +1257,14 @@ export const getOrdersPage = createServerFn({ method: "POST" })
       // Count total matching records
       const countResult = await rows<{ total: number }>(
         c,
-        `SELECT COUNT(*) as total FROM orders o JOIN users u ON u.user_id=o.user_id ${whereSql}`,
+        `SELECT COUNT(*) as total FROM orders o LEFT JOIN users u ON u.user_id=o.user_id ${whereSql}`,
         queryParams,
       );
       const total = Number(countResult[0]?.total ?? 0);
 
       // Fetch matching paginated orders
-      const ordersSql = `SELECT o.order_id,o.user_id,o.total,o.status,o.address,o.is_paid,o.payment_method,o.internal_notes,DATE(o.created_at) created_at,u.name customer
-        FROM orders o JOIN users u ON u.user_id=o.user_id
+      const ordersSql = `      SELECT o.order_id,o.user_id,o.total,o.status,o.address,o.is_paid,o.payment_method,o.internal_notes,DATE(o.created_at) created_at,u.name customer
+        FROM orders o LEFT JOIN users u ON u.user_id=o.user_id
         ${whereSql}
         ORDER BY o.order_id DESC
         LIMIT ${Number(pageSize)} OFFSET ${Number(offset)}`;
@@ -1142,17 +1491,23 @@ export const setOrderStatus = createServerFn({ method: "POST" })
         id: z.number().int(),
         status: z.enum(ORDER_STATUSES),
         notes: z.string().optional(),
+        customer_message: z.string().max(2000).optional(),
       })
       .parse(d),
   )
   .handler(async ({ data }) => {
     const u = await requirePermission("orders.update_status");
+    let orderUserId: number | null = null;
+    const newStatus = data.status as OrderStatus;
+    // Overwritten from the row inside the transaction; initialised to the
+    // requested status so the post-commit block always has a sane value.
+    let prevStatus: OrderStatus = newStatus;
     await withDb(async (c) => {
       await c.beginTransaction();
       try {
         const [existing] = await rows<{
           order_id: number;
-          user_id: number;
+          user_id: number | null;
           status: OrderStatus;
           is_paid: number;
           payment_method: string;
@@ -1163,53 +1518,28 @@ export const setOrderStatus = createServerFn({ method: "POST" })
         );
         if (!existing) throw new Error("Order not found.");
 
-        const prevStatus = existing.status;
-        const newStatus = data.status as OrderStatus;
+        orderUserId = existing.user_id;
+        prevStatus = existing.status;
 
-        // Staff order progression validation:
-        if (u.role === "staff") {
-          // Cannot cancel once out for delivery or delivered
-          if (
-            newStatus === "Cancelled" &&
-            (prevStatus === "Out for Delivery" || prevStatus === "Delivered")
-          ) {
+        // Same transition rules for staff and admin: the shared table is the
+        // single source of truth, so no role can skip a stage or revive a
+        // terminal order.
+        if (!canTransition(prevStatus, newStatus)) {
+          throw new InvalidTransitionError(prevStatus, newStatus);
+        }
+
+        // Delivery requires payment, unless it is Cash on Delivery. Applies to
+        // every role — guests can never reach this endpoint, and staff cannot
+        // bypass the rule.
+        if (newStatus === "Delivered") {
+          const isPaid = existing.is_paid === 1;
+          const isCod = existing.payment_method?.toLowerCase() === "cash_on_delivery";
+          if (!isPaid && !isCod) {
             const err = new Error(
-              "Staff members cannot cancel orders once out for delivery or delivered.",
+              "Order cannot be marked delivered until it has been paid or confirmed Cash on Delivery.",
             );
             (err as any).statusCode = 403;
             throw err;
-          }
-
-          // Allowed transitions progression: Pending -> Confirmed -> In Production -> Out for Delivery -> Delivered
-          const validTransitions: Record<OrderStatus, OrderStatus[]> = {
-            Pending: ["Confirmed", "Cancelled"],
-            Confirmed: ["In Production", "Cancelled"],
-            "In Production": ["Out for Delivery", "Cancelled"],
-            "Out for Delivery": ["Delivered"],
-            Delivered: [],
-            Cancelled: [],
-          };
-
-          const allowed = validTransitions[prevStatus] ?? [];
-          if (!allowed.includes(newStatus)) {
-            const err = new Error(
-              `Invalid order status transition from ${prevStatus} to ${newStatus} for staff members.`,
-            );
-            (err as any).statusCode = 403;
-            throw err;
-          }
-
-          // Delivered only allowed if paid or cash_on_delivery
-          if (newStatus === "Delivered") {
-            const isPaid = existing.is_paid === 1;
-            const isCod = existing.payment_method?.toLowerCase() === "cash_on_delivery";
-            if (!isPaid && !isCod) {
-              const err = new Error(
-                "Order cannot be marked delivered until it has been paid or confirmed Cash on Delivery.",
-              );
-              (err as any).statusCode = 403;
-              throw err;
-            }
           }
         }
 
@@ -1240,38 +1570,470 @@ export const setOrderStatus = createServerFn({ method: "POST" })
 
         await c.execute("UPDATE orders SET status=? WHERE order_id=?", [newStatus, data.id]);
 
-        // Insert into order_status_history
+        // Insert into order_status_history (staff-facing; never sent to customers)
         await c.execute(
           "INSERT INTO order_status_history (order_id, status, notes, changed_by) VALUES (?, ?, ?, ?)",
           [data.id, newStatus, data.notes ?? null, u.user_id],
         );
 
-        await c.commit();
+        // Dispatch and delivery completion are recorded once, on the order's
+        // own delivery row.
+        if (newStatus === "Out for Delivery" && prevStatus !== "Out for Delivery") {
+          await c.execute("INSERT IGNORE INTO order_deliveries (order_id) VALUES (?)", [data.id]);
+          await c.execute(
+            "UPDATE order_deliveries SET dispatched_at=NOW(), dispatched_by=? WHERE order_id=? AND dispatched_at IS NULL",
+            [u.user_id, data.id],
+          );
+        }
 
-        // Notify customer
-        await notify(
-          existing.user_id,
-          "order_status",
-          `Order #${existing.order_id} ${newStatus}`,
-          `Your order #${existing.order_id} status has been updated to ${newStatus}.`,
-          `/account?tab=orders`,
-        );
+        if (newStatus === "Delivered") {
+          await c.execute("INSERT IGNORE INTO order_deliveries (order_id) VALUES (?)", [data.id]);
+          // delivered_at IS NULL guard makes a retried/double submission
+          // record the completion exactly once.
+          await c.execute(
+            "UPDATE order_deliveries SET delivered_at=NOW(), delivered_by=?, delivered_by_name=? WHERE order_id=? AND delivered_at IS NULL",
+            [u.user_id, u.name, data.id],
+          );
+        }
 
-        // Audit log
-        await logAction(
-          null,
-          "UPDATE_ORDER_STATUS",
-          "order",
+        // Customer-visible feed entry. `notes` stays internal; only an explicit
+        // customer_message is ever shown to the customer.
+        await pushCustomerOrderUpdate(
+          c,
           data.id,
-          { status: prevStatus },
-          { status: newStatus, notes: data.notes },
+          newStatus === "Delivered" ? "delivery" : "status",
+          data.customer_message ?? null,
+          prevStatus,
+          newStatus,
         );
+
+        await c.commit();
       } catch (err) {
         await c.rollback().catch(() => {});
         throw err;
       }
     });
+
+    // Notify the customer: in-app for registered buyers, email for everyone
+    // (guests have no notifications row because user_id is NOT NULL there).
+    await notify(
+      orderUserId,
+      "order_status",
+      `Order #${data.id} ${newStatus}`,
+      `Your order #${data.id} status has been updated to ${newStatus}.`,
+      "/track-order",
+    );
+    await emailOrderCustomer(data.id, newStatus);
+
+    // Audit log
+    await logAction(
+      null,
+      "UPDATE_ORDER_STATUS",
+      "order",
+      data.id,
+      { status: prevStatus },
+      { status: newStatus, notes: data.notes },
+    );
     return { ok: true };
+  });
+
+// ─── delivery management ──────────────────────────────────────────────────────
+
+const DELIVERY_SELECT = `SELECT dv.order_id, dv.assigned_to, dv.delivery_notes, dv.expected_delivery_date,
+      dv.dispatched_at, dv.dispatched_by, dv.dispatched_note,
+      dv.delivered_at, dv.delivered_by, dv.delivered_by_name,
+      dv.completion_notes, dv.confirmation_name, dv.confirmation_details,
+      a.name AS assigned_name
+   FROM order_deliveries dv
+   LEFT JOIN users a ON a.user_id = dv.assigned_to`;
+
+interface DeliveryRow {
+  order_id: number;
+  assigned_to: number | null;
+  delivery_notes: string | null;
+  expected_delivery_date: string | null;
+  dispatched_at: string | null;
+  dispatched_by: number | null;
+  dispatched_note: string | null;
+  delivered_at: string | null;
+  delivered_by: number | null;
+  delivered_by_name: string | null;
+  completion_notes: string | null;
+  confirmation_name: string | null;
+  confirmation_details: string | null;
+  assigned_name: string | null;
+}
+
+export const getOrderDelivery = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ order_id: z.number().int().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("orders.view");
+    return withDb(async (c) => {
+      const [order] = await rows<{
+        status: OrderStatus;
+        is_paid: number;
+        payment_method: string;
+        address: string;
+      }>(c, "SELECT status, is_paid, payment_method, address FROM orders WHERE order_id = ?", [
+        data.order_id,
+      ]);
+      if (!order) throw new Error("Order not found.");
+
+      const [delivery] = await rows<DeliveryRow>(c, `${DELIVERY_SELECT} WHERE dv.order_id = ?`, [
+        data.order_id,
+      ]);
+
+      const contact = await loadOrderContact(c, data.order_id);
+      const assignable = await rows<{ user_id: number; name: string; role: string }>(
+        c,
+        "SELECT user_id, name, role FROM users WHERE role IN ('staff','admin') AND COALESCE(is_active,1)=1 ORDER BY name",
+      );
+
+      return {
+        order_id: data.order_id,
+        status: order.status,
+        is_paid: order.is_paid === 1,
+        payment_method: order.payment_method,
+        address: order.address,
+        delivery: delivery ?? null,
+        customer_phone: contact?.phone ?? null,
+        customer_name: contact?.name ?? null,
+        assignable,
+        next_statuses: nextStatuses(order.status),
+      };
+    });
+  });
+
+export const saveDeliveryInfo = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        order_id: z.number().int().min(1),
+        assigned_to: z.number().int().min(1).nullable().optional(),
+        delivery_notes: z.string().max(2000).nullable().optional(),
+        expected_delivery_date: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .nullable()
+          .optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requirePermission("orders.update_status");
+    await withDb(async (c) => {
+      await c.beginTransaction();
+      try {
+        const [order] = await rows<{ order_id: number }>(
+          c,
+          "SELECT order_id FROM orders WHERE order_id = ? FOR UPDATE",
+          [data.order_id],
+        );
+        if (!order) throw new Error("Order not found.");
+
+        // Upsert: the row is created on first save and updated afterwards.
+        await c.execute(
+          `INSERT INTO order_deliveries (order_id, assigned_to, delivery_notes, expected_delivery_date)
+           VALUES (?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             assigned_to = VALUES(assigned_to),
+             delivery_notes = VALUES(delivery_notes),
+             expected_delivery_date = VALUES(expected_delivery_date)`,
+          [
+            data.order_id,
+            data.assigned_to ?? null,
+            data.delivery_notes ?? null,
+            data.expected_delivery_date ?? null,
+          ],
+        );
+        await c.commit();
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
+    });
+
+    await logAction(null, "UPDATE_ORDER_DELIVERY", "order", data.order_id, null, {
+      assigned_to: data.assigned_to ?? null,
+      expected_delivery_date: data.expected_delivery_date ?? null,
+      has_notes: !!data.delivery_notes,
+    });
+    return { ok: true };
+  });
+
+export const recordOrderDispatch = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        order_id: z.number().int().min(1),
+        note: z.string().max(255).optional(),
+        customer_message: z.string().max(2000).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requirePermission("orders.update_status");
+    let from: OrderStatus = "Pending";
+    let orderUserId: number | null = null;
+
+    await withDb(async (c) => {
+      await c.beginTransaction();
+      try {
+        const [order] = await rows<{ status: OrderStatus; user_id: number | null }>(
+          c,
+          "SELECT status, user_id FROM orders WHERE order_id = ? FOR UPDATE",
+          [data.order_id],
+        );
+        if (!order) throw new Error("Order not found.");
+        from = order.status;
+        orderUserId = order.user_id;
+
+        if (!canTransition(from, "Out for Delivery")) {
+          throw new InvalidTransitionError(from, "Out for Delivery");
+        }
+
+        await c.execute("INSERT IGNORE INTO order_deliveries (order_id) VALUES (?)", [
+          data.order_id,
+        ]);
+        // dispatched_at IS NULL again: re-dispatching keeps the first timestamp.
+        await c.execute(
+          "UPDATE order_deliveries SET dispatched_at=NOW(), dispatched_by=?, dispatched_note=? WHERE order_id=? AND dispatched_at IS NULL",
+          [u.user_id, data.note ?? null, data.order_id],
+        );
+
+        await c.execute("UPDATE orders SET status='Out for Delivery' WHERE order_id=?", [
+          data.order_id,
+        ]);
+        await c.execute(
+          "INSERT INTO order_status_history (order_id, status, notes, changed_by) VALUES (?, 'Out for Delivery', ?, ?)",
+          [data.order_id, data.note ?? null, u.user_id],
+        );
+
+        await pushCustomerOrderUpdate(
+          c,
+          data.order_id,
+          "delivery",
+          data.customer_message ?? "Your order is out for delivery.",
+          from,
+          "Out for Delivery",
+        );
+        await c.commit();
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
+    });
+
+    // In-app notification for registered buyers; guests are reached by email
+    // only (notifications.user_id cannot be null).
+    await notify(
+      orderUserId,
+      "order_status",
+      `Order #${data.order_id} Out for Delivery`,
+      `Your order #${data.order_id} is now out for delivery.`,
+      "/track-order",
+      { dedupeKey: `order-dispatch:${data.order_id}` },
+    );
+    await emailOrderCustomer(data.order_id, "Out for Delivery");
+    await logAction(
+      null,
+      "DISPATCH_ORDER",
+      "order",
+      data.order_id,
+      { status: from },
+      {
+        status: "Out for Delivery",
+      },
+    );
+    return { ok: true };
+  });
+
+// ─── public guest tracking (session proves ownership) ────────────────────────
+// The verified session carries only the order id, so every request here can
+// be gated on session ownership — no password is ever sent again.
+
+export const getGuestOrderStatus = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ order_id: z.number().int().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    const sessionOrderId = await requireOrderSession();
+    assertOrderOwnership(sessionOrderId, data.order_id);
+
+    return withDb(async (c) => {
+      const [order] = await rows<{
+        order_id: number;
+        user_id: number | null;
+        total: number;
+        status: OrderStatus;
+        address: string;
+        is_paid: number;
+        payment_method: string;
+        order_number: string | null;
+        created_at: string;
+      }>(
+        c,
+        `SELECT o.order_id, o.user_id, o.total, o.status, o.address, o.is_paid,
+                o.payment_method, o.order_number, DATE(o.created_at) created_at
+         FROM orders o WHERE o.order_id = ?`,
+        [data.order_id],
+      );
+      if (!order) throw new Error("Order not found.");
+
+      const items = await rows<{
+        product_id: number;
+        product_name: string;
+        quantity: number;
+        unit_price: number;
+      }>(
+        c,
+        "SELECT product_id, product_name, quantity, unit_price FROM order_items WHERE order_id = ?",
+        [data.order_id],
+      );
+
+      const messages = await rows<{
+        id: number;
+        sender_type: string;
+        sender_name: string;
+        kind: string;
+        body: string | null;
+        status_from: string | null;
+        status_to: string | null;
+        created_at: string;
+      }>(c, `${MESSAGE_SELECT} WHERE m.order_id = ? ORDER BY m.id ASC`, [data.order_id]);
+
+      const [delivery] = await rows<DeliveryRow>(
+        c,
+        `${DELIVERY_SELECT} WHERE dv.order_id = ?`,
+        [data.order_id],
+      );
+
+      await c.execute(
+        "UPDATE order_messages SET is_read_by_customer = 1 WHERE order_id = ? AND sender_type <> 'customer'",
+        [data.order_id],
+      );
+
+      return {
+        order: {
+          order_id: order.order_id,
+          order_number: order.order_number,
+          user_id: order.user_id,
+          total: order.total,
+          status: order.status,
+          address: order.address,
+          is_paid: order.is_paid === 1,
+          payment_method: order.payment_method,
+          created_at: order.created_at,
+        },
+        items,
+        messages,
+        delivery: delivery ?? null,
+      };
+    });
+  });
+
+export const completeOrderDelivery = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        order_id: z.number().int().min(1),
+        completion_notes: z.string().max(2000).optional(),
+        confirmation_name: z.string().max(100).optional(),
+        confirmation_details: z.string().max(255).optional(),
+        customer_message: z.string().max(2000).optional(),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requirePermission("orders.update_status");
+
+    const result = await withDb(async (c) => {
+      await c.beginTransaction();
+      try {
+        const [order] = await rows<{
+          status: OrderStatus;
+          is_paid: number;
+          payment_method: string;
+        }>(c, "SELECT status, is_paid, payment_method FROM orders WHERE order_id = ? FOR UPDATE", [
+          data.order_id,
+        ]);
+        if (!order) throw new Error("Order not found.");
+
+        if (order.status === "Delivered") {
+          // Idempotent: a retried request reports the existing completion
+          // instead of writing a second one.
+          const [done] = await rows<{ delivered_at: string | null }>(
+            c,
+            "SELECT delivered_at FROM order_deliveries WHERE order_id = ?",
+            [data.order_id],
+          );
+          await c.rollback().catch(() => {});
+          return { already: true, delivered_at: done?.delivered_at ?? null };
+        }
+
+        if (!canTransition(order.status, "Delivered")) {
+          throw new InvalidTransitionError(order.status, "Delivered");
+        }
+
+        // Payment rule is enforced for every role.
+        const isPaid = order.is_paid === 1;
+        const isCod = order.payment_method?.toLowerCase() === "cash_on_delivery";
+        if (!isPaid && !isCod) {
+          const err = new Error(
+            "Order cannot be marked delivered until it has been paid or confirmed Cash on Delivery.",
+          );
+          (err as any).statusCode = 403;
+          throw err;
+        }
+
+        await c.execute("INSERT IGNORE INTO order_deliveries (order_id) VALUES (?)", [
+          data.order_id,
+        ]);
+        await c.execute(
+          `UPDATE order_deliveries SET
+             delivered_at = NOW(), delivered_by = ?, delivered_by_name = ?,
+             completion_notes = ?, confirmation_name = ?, confirmation_details = ?
+           WHERE order_id = ? AND delivered_at IS NULL`,
+          [
+            u.user_id,
+            u.name,
+            data.completion_notes ?? null,
+            data.confirmation_name ?? null,
+            data.confirmation_details ?? null,
+            data.order_id,
+          ],
+        );
+
+        await c.execute("UPDATE orders SET status='Delivered' WHERE order_id=?", [data.order_id]);
+        await c.execute(
+          "INSERT INTO order_status_history (order_id, status, notes, changed_by) VALUES (?, 'Delivered', ?, ?)",
+          [data.order_id, data.completion_notes ?? null, u.user_id],
+        );
+
+        await pushCustomerOrderUpdate(
+          c,
+          data.order_id,
+          "delivery",
+          data.customer_message ?? "Your order has been delivered. Thank you!",
+          order.status,
+          "Delivered",
+        );
+        await c.commit();
+        return { already: false };
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
+    });
+
+    // Delivered orders feed the delivered-order reports through orders.status,
+    // which is what the existing report queries filter on, so no extra
+    // reporting write is required.
+    await emailOrderCustomer(data.order_id, "Delivered");
+    if (!result.already) {
+      await logAction(null, "COMPLETE_ORDER_DELIVERY", "order", data.order_id, null, {
+        confirmation_name: data.confirmation_name ?? null,
+      });
+    }
+    return result;
   });
 
 export const addOrderNote = createServerFn({ method: "POST" })
@@ -1413,7 +2175,7 @@ export const setQuoteStatus = createServerFn({ method: "POST" })
         data.reply_message
           ? data.reply_message
           : `Your quote request status has been updated to ${newStatus}.${amount ? ` Quoted amount: ETB ${amount.toLocaleString()}` : ""}`,
-        `/account?tab=quotes`,
+        "/track-order",
       );
 
       await logAction(
@@ -1451,7 +2213,7 @@ export const approveQuote = createServerFn({ method: "POST" })
         "quote_status",
         `Quote Request #${q.quote_id} Approved & Ready`,
         `Your quote request has been approved with quote amount: ETB ${Number(q.quoted_amount).toLocaleString()}.`,
-        "/account?tab=quotes",
+        "/track-order",
       );
       await logAction(
         null,
@@ -1494,10 +2256,19 @@ export const convertQuoteToOrder = createServerFn({ method: "POST" })
         ]);
         if (ur) userId = ur.user_id;
       }
-      if (!userId)
-        throw new Error(
-          "No user account found for this quote. Ask the customer to register first.",
-        );
+      if (!userId) {
+        // Guest order — store with NULL user_id, notify via email only
+        const { sendOrderStatusEmail } = await import("./email");
+        await sendOrderStatusEmail(
+          q.email,
+          q.name ?? q.email,
+          0,
+          "Pending",
+          q.quoted_amount ?? 0,
+        ).catch((err) => {
+          console.error("[convertQuoteToOrder] Failed to send guest order email:", err);
+        });
+      }
 
       await c.beginTransaction();
       try {
@@ -1540,7 +2311,7 @@ export const convertQuoteToOrder = createServerFn({ method: "POST" })
           "order_created",
           `Order #${orderId} Created from Your Quote`,
           `Your quote #${q.quote_id} has been converted to Order #${orderId}.`,
-          "/account?tab=orders",
+          "/track-order",
         );
         await logAction(
           null,
@@ -1764,26 +2535,6 @@ export const rejectStockAdjustment = createServerFn({ method: "POST" })
     });
   });
 
-export const getMyNotifications = createServerFn({ method: "GET" }).handler(async () => {
-  const u = await requireUser();
-  return withDb((c) =>
-    rows<{
-      id: number;
-      user_id: number;
-      type: string;
-      title: string;
-      body: string;
-      link_url: string | null;
-      is_read: number;
-      created_at: string;
-    }>(
-      c,
-      "SELECT id, user_id, type, title, body, link_url, is_read, DATE(created_at) created_at FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 50",
-      [u.user_id],
-    ),
-  );
-});
-
 export const getAuditLogs = createServerFn({ method: "POST" })
   .validator((d) =>
     z
@@ -1852,6 +2603,49 @@ export const getAuditLogs = createServerFn({ method: "POST" })
     });
   });
 
+// ---------- contact form (public) ----------
+export const submitContactMessage = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        name: z.string().trim().min(1).max(100),
+        email: z.string().trim().email().max(255),
+        phone: z.string().trim().max(30).optional(),
+        subject: z.string().trim().min(1).max(150),
+        message: z.string().trim().min(1).max(2000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const id = await withDb(async (c) => {
+      const [r] = await c.execute(
+        "INSERT INTO contact_messages (name,email,phone,subject,message) VALUES (?,?,?,?,?)",
+        [data.name, data.email.toLowerCase(), data.phone || null, data.subject, data.message],
+      );
+      return (r as { insertId: number }).insertId;
+    });
+
+    // Alert everyone who can read messages (admin + staff), in-app and by email.
+    const recipients = await withDb((c) =>
+      rows<{ user_id: number }>(
+        c,
+        "SELECT user_id FROM users WHERE role IN ('admin','staff') AND COALESCE(is_active,1)=1",
+      ),
+    );
+    for (const r of recipients) {
+      await notify(
+        r.user_id,
+        "customer_message",
+        "New Contact Message",
+        `From ${data.name} (${data.email}): ${data.subject}`,
+        "/admin",
+      );
+    }
+
+    await logAction(null, "SUBMIT_CONTACT_MESSAGE", "contact_message", id, null, data);
+    return { ok: true, id };
+  });
+
 export const getContactMessages = createServerFn({ method: "GET" }).handler(async () => {
   await requirePermission("messages.view");
   return withDb((c) =>
@@ -1893,7 +2687,7 @@ export const replyContactMessage = createServerFn({ method: "POST" })
           "message_reply",
           "New Message from Polar Fiber Support",
           data.message,
-          "/account?tab=support",
+          "/contact",
         );
       }
       await logAction(
@@ -2030,7 +2824,7 @@ export const updateSupportTicketStatus = createServerFn({ method: "POST" })
           "ticket_status",
           `Ticket #${data.ticket_id} Status Updated`,
           `Your support ticket status has been updated to "${data.status}".`,
-          "/account?tab=support",
+          "/contact",
         );
       }
       await logAction(
@@ -2084,7 +2878,7 @@ export const replySupportTicket = createServerFn({ method: "POST" })
             "ticket_reply",
             `Reply on Ticket #${data.ticket_id}`,
             data.reply,
-            "/account?tab=support",
+            "/contact",
           );
         }
       }
@@ -2219,7 +3013,7 @@ export const updateUserRole = createServerFn({ method: "POST" })
         "role_change",
         "Account Role Updated",
         `Your Polar Fiber account role has been changed to "${data.role}".`,
-        data.role === "customer" ? "/account" : "/admin",
+        "/admin",
       );
 
       await logAction(
@@ -2558,7 +3352,7 @@ export const markOrderPaid = createServerFn({ method: "POST" })
       const [order] = await rows<{
         order_id: number;
         status: string;
-        user_id: number;
+        user_id: number | null;
         is_paid: number;
       }>(c, "SELECT order_id, status, user_id, is_paid FROM orders WHERE order_id=?", [
         data.order_id,
@@ -2579,7 +3373,7 @@ export const markOrderPaid = createServerFn({ method: "POST" })
         "order_paid",
         `Order #${data.order_id} Payment Confirmed`,
         `Your payment for Order #${data.order_id} has been confirmed.`,
-        "/account?tab=orders",
+        "/track-order",
       );
       await logAction(
         null,
@@ -3140,597 +3934,4 @@ export const getProductImages = createServerFn({ method: "POST" })
         [data.product_id],
       ),
     );
-  });
-
-// =============================================================================
-// CUSTOMER MESSAGES / CONVERSATIONS
-// =============================================================================
-
-interface CustomerConversationRow {
-  conversation_id: number;
-  user_id: number;
-  subject: string;
-  topic: string;
-  status: "Awaiting Reply" | "Admin Replied" | "Resolved";
-  created_at: string;
-  updated_at: string;
-  last_message_text?: string | null;
-  last_message_at?: string | null;
-  unread_count?: number;
-}
-
-interface CustomerMessageRow {
-  message_id: number;
-  conversation_id: number;
-  sender_type: "customer" | "admin";
-  sender_id: number;
-  sender_name: string;
-  text: string;
-  is_read: number;
-  created_at: string;
-}
-
-export const getCustomerConversations = createServerFn({ method: "GET" }).handler(async () => {
-  const u = await requireUser();
-  return withDb((c) =>
-    rows<CustomerConversationRow>(
-      c,
-      `SELECT cc.conversation_id, cc.user_id, cc.subject, cc.topic, cc.status,
-              cc.created_at, cc.updated_at,
-              cm.text as last_message_text,
-              cm.created_at as last_message_at,
-              (SELECT COUNT(*) FROM customer_messages WHERE conversation_id = cc.conversation_id AND sender_type = 'admin' AND is_read = 0) as unread_count
-       FROM customer_conversations cc
-       LEFT JOIN customer_messages cm ON cm.conversation_id = cc.conversation_id
-       WHERE cc.user_id = ?
-       ORDER BY cc.updated_at DESC`,
-      [u.user_id],
-    ),
-  );
-});
-
-export const getCustomerConversationMessages = createServerFn({ method: "POST" })
-  .validator((d) => z.object({ conversation_id: z.number().int() }).parse(d))
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    return withDb(async (c) => {
-      // Verify ownership
-      const [conv] = await rows<{ conversation_id: number; user_id: number }>(
-        c,
-        "SELECT conversation_id, user_id FROM customer_conversations WHERE conversation_id = ?",
-        [data.conversation_id],
-      );
-      if (!conv || conv.user_id !== u.user_id) throw new Error("Conversation not found.");
-
-      // Mark admin messages as read
-      await c.execute(
-        "UPDATE customer_messages SET is_read = 1 WHERE conversation_id = ? AND sender_type = 'admin'",
-        [data.conversation_id],
-      );
-
-      return rows<CustomerMessageRow>(
-        c,
-        "SELECT message_id, conversation_id, sender_type, sender_id, sender_name, text, is_read, created_at FROM customer_messages WHERE conversation_id = ? ORDER BY created_at ASC",
-        [data.conversation_id],
-      );
-    });
-  });
-
-export const createCustomerConversation = createServerFn({ method: "POST" })
-  .validator((d) =>
-    z
-      .object({
-        subject: z.string().trim().min(1).max(200),
-        topic: z.string().trim().min(1).max(100).default("General Inquiry"),
-        text: z.string().trim().min(1).max(5000),
-      })
-      .parse(d),
-  )
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    return withDb(async (c) => {
-      await c.beginTransaction();
-      try {
-        const [convResult] = await c.execute(
-          "INSERT INTO customer_conversations (user_id, subject, topic, status) VALUES (?, ?, ?, 'Awaiting Reply')",
-          [u.user_id, data.subject, data.topic],
-        );
-        const conversationId = (convResult as { insertId: number }).insertId;
-
-        await c.execute(
-          "INSERT INTO customer_messages (conversation_id, sender_type, sender_id, sender_name, text) VALUES (?, 'customer', ?, ?, ?)",
-          [conversationId, u.user_id, u.name, data.text],
-        );
-
-        // Notify admins
-        const admins = await rows<{ user_id: number }>(
-          c,
-          "SELECT user_id FROM users u JOIN user_roles ur ON ur.user_id = u.user_id WHERE ur.role = 'admin' AND u.is_active = 1",
-        );
-        for (const admin of admins) {
-          await notify(
-            admin.user_id,
-            "customer_message",
-            `New Customer Message: ${data.subject}`,
-            `Customer ${u.name} started a new conversation.`,
-            `/admin?tab=messages&conversation=${conversationId}`,
-          );
-        }
-
-        await logAction(null, "CREATE_CUSTOMER_CONVERSATION", "conversation", conversationId, null, {
-          user_id: u.user_id,
-          subject: data.subject,
-          topic: data.topic,
-        });
-
-        await c.commit();
-        return { ok: true, conversation_id: conversationId };
-      } catch (e) {
-        await c.rollback().catch(() => {});
-        throw e;
-      }
-    });
-  });
-
-export const replyToCustomerConversation = createServerFn({ method: "POST" })
-  .validator((d) =>
-    z
-      .object({
-        conversation_id: z.number().int(),
-        text: z.string().trim().min(1).max(5000),
-      })
-      .parse(d),
-  )
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    return withDb(async (c) => {
-      const [conv] = await rows<{ conversation_id: number; user_id: number; subject: string }>(
-        c,
-        "SELECT conversation_id, user_id, subject FROM customer_conversations WHERE conversation_id = ?",
-        [data.conversation_id],
-      );
-      if (!conv) throw new Error("Conversation not found.");
-
-      await c.beginTransaction();
-      try {
-        await c.execute(
-          "INSERT INTO customer_messages (conversation_id, sender_type, sender_id, sender_name, text) VALUES (?, ?, ?, ?, ?)",
-          [data.conversation_id, u.role === "admin" ? "admin" : "customer", u.user_id, u.name, data.text],
-        );
-
-        await c.execute(
-          "UPDATE customer_conversations SET status = ?, updated_at = NOW() WHERE conversation_id = ?",
-          [u.role === "admin" ? "Admin Replied" : "Awaiting Reply", data.conversation_id],
-        );
-
-        // Notify the other party
-        const targetUserId = u.role === "admin" ? conv.user_id : null; // Admins will be notified separately
-        if (targetUserId) {
-          await notify(
-            targetUserId,
-            "customer_message",
-            `Reply on: ${conv.subject}`,
-            `You have a new message from ${u.name}.`,
-            `/account?tab=messages&conversation=${data.conversation_id}`,
-          );
-        } else if (u.role === "customer") {
-          // Notify all admins
-          const admins = await rows<{ user_id: number }>(
-            c,
-            "SELECT user_id FROM users u JOIN user_roles ur ON ur.user_id = u.user_id WHERE ur.role = 'admin' AND u.is_active = 1",
-          );
-          for (const admin of admins) {
-            await notify(
-              admin.user_id,
-              "customer_message",
-              `Customer Reply: ${conv.subject}`,
-              `Customer ${u.name} replied.`,
-              `/admin?tab=messages&conversation=${data.conversation_id}`,
-            );
-          }
-        }
-
-        await logAction(null, "REPLY_CUSTOMER_CONVERSATION", "conversation", data.conversation_id, null, {
-          sender_type: u.role === "admin" ? "admin" : "customer",
-          sender_id: u.user_id,
-        });
-
-        await c.commit();
-        return { ok: true };
-      } catch (e) {
-        await c.rollback().catch(() => {});
-        throw e;
-      }
-    });
-  });
-
-export const resolveCustomerConversation = createServerFn({ method: "POST" })
-  .validator((d) => z.object({ conversation_id: z.number().int() }).parse(d))
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    if (u.role !== "admin") throw Object.assign(new Error("Only admins can resolve conversations."), { status: 403 });
-    return withDb(async (c) => {
-      const [conv] = await rows<{ conversation_id: number }>(
-        c,
-        "SELECT conversation_id FROM customer_conversations WHERE conversation_id = ?",
-        [data.conversation_id],
-      );
-      if (!conv) throw new Error("Conversation not found.");
-      await c.execute(
-        "UPDATE customer_conversations SET status = 'Resolved', updated_at = NOW() WHERE conversation_id = ?",
-        [data.conversation_id],
-      );
-      await logAction(null, "RESOLVE_CUSTOMER_CONVERSATION", "conversation", data.conversation_id, null, {
-        resolved_by: u.user_id,
-      });
-      return { ok: true };
-    });
-  });
-
-// Admin: list all customer conversations
-export const getAllCustomerConversations = createServerFn({ method: "GET" }).handler(async () => {
-  await requirePermission("messages.view");
-  return withDb((c) =>
-    rows<CustomerConversationRow & { customer_name: string; customer_email: string }>(
-      c,
-      `SELECT cc.conversation_id, cc.user_id, cc.subject, cc.topic, cc.status,
-              cc.created_at, cc.updated_at,
-              u.name as customer_name,
-              u.email as customer_email,
-              cm.text as last_message_text,
-              cm.created_at as last_message_at,
-              (SELECT COUNT(*) FROM customer_messages WHERE conversation_id = cc.conversation_id AND sender_type = 'customer' AND is_read = 0) as unread_count
-       FROM customer_conversations cc
-       JOIN users u ON u.user_id = cc.user_id
-       LEFT JOIN customer_messages cm ON cm.conversation_id = cc.conversation_id
-       ORDER BY cc.updated_at DESC`,
-    ),
-  );
-});
-
-// Admin: get messages for a conversation
-export const getAdminCustomerConversationMessages = createServerFn({ method: "POST" })
-  .validator((d) => z.object({ conversation_id: z.number().int() }).parse(d))
-  .handler(async ({ data }) => {
-    await requirePermission("messages.view");
-    return withDb(async (c) => {
-      // Mark customer messages as read
-      await c.execute(
-        "UPDATE customer_messages SET is_read = 1 WHERE conversation_id = ? AND sender_type = 'customer'",
-        [data.conversation_id],
-      );
-      return rows<CustomerMessageRow>(
-        c,
-        "SELECT message_id, conversation_id, sender_type, sender_id, sender_name, text, is_read, created_at FROM customer_messages WHERE conversation_id = ? ORDER BY created_at ASC",
-        [data.conversation_id],
-      );
-    });
-  });
-
-// Admin: reply to customer conversation
-export const adminReplyToCustomerConversation = createServerFn({ method: "POST" })
-  .validator((d) =>
-    z
-      .object({
-        conversation_id: z.number().int(),
-        text: z.string().trim().min(1).max(5000),
-      })
-      .parse(d),
-  )
-  .handler(async ({ data }) => {
-    const u = await requirePermission("messages.reply");
-    return withDb(async (c) => {
-      const [conv] = await rows<{ conversation_id: number; user_id: number; subject: string }>(
-        c,
-        "SELECT conversation_id, user_id, subject FROM customer_conversations WHERE conversation_id = ?",
-        [data.conversation_id],
-      );
-      if (!conv) throw new Error("Conversation not found.");
-
-      await c.beginTransaction();
-      try {
-        await c.execute(
-          "INSERT INTO customer_messages (conversation_id, sender_type, sender_id, sender_name, text) VALUES (?, 'admin', ?, ?, ?)",
-          [data.conversation_id, u.user_id, u.name, data.text],
-        );
-
-        await c.execute(
-          "UPDATE customer_conversations SET status = 'Admin Replied', updated_at = NOW() WHERE conversation_id = ?",
-          [data.conversation_id],
-        );
-
-        // Notify customer
-        await notify(
-          conv.user_id,
-          "customer_message",
-          `Reply on: ${conv.subject}`,
-          `Polar Fiber team replied to your message.`,
-          `/account?tab=messages&conversation=${data.conversation_id}`,
-        );
-
-        await logAction(null, "ADMIN_REPLY_CUSTOMER_CONVERSATION", "conversation", data.conversation_id, null, {
-          admin_id: u.user_id,
-        });
-
-        await c.commit();
-        return { ok: true };
-      } catch (e) {
-        await c.rollback().catch(() => {});
-        throw e;
-      }
-    });
-  });
-
-// =============================================================================
-// CUSTOMER ADDRESSES
-// =============================================================================
-
-interface AddressRow {
-  address_id: number;
-  user_id: number;
-  label: string;
-  recipient: string;
-  phone: string;
-  line1: string;
-  line2: string | null;
-  city: string;
-  region: string | null;
-  country: string;
-  is_default: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export const getCustomerAddresses = createServerFn({ method: "GET" }).handler(async () => {
-  const u = await requireUser();
-  return withDb((c) =>
-    rows<AddressRow>(
-      c,
-      "SELECT address_id, user_id, label, recipient, phone, line1, line2, city, region, country, is_default, created_at, updated_at FROM addresses WHERE user_id = ? ORDER BY is_default DESC, created_at DESC",
-      [u.user_id],
-    ),
-  );
-});
-
-export const createCustomerAddress = createServerFn({ method: "POST" })
-  .validator((d) =>
-    z
-      .object({
-        label: z.string().trim().min(1).max(80),
-        recipient: z.string().trim().min(1).max(100),
-        phone: z.string().trim().max(30).default(""),
-        line1: z.string().trim().min(1).max(200),
-        line2: z.string().trim().max(200).nullable().optional(),
-        city: z.string().trim().min(1).max(100).default("Addis Ababa"),
-        region: z.string().trim().max(100).nullable().optional(),
-        country: z.string().trim().min(1).max(80).default("Ethiopia"),
-        is_default: z.boolean().default(false),
-      })
-      .parse(d),
-  )
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    return withDb(async (c) => {
-      await c.beginTransaction();
-      try {
-        // If this is default, unset other defaults
-        if (data.is_default) {
-          await c.execute("UPDATE addresses SET is_default = 0 WHERE user_id = ?", [u.user_id]);
-        }
-
-        const [result] = await c.execute(
-          "INSERT INTO addresses (user_id, label, recipient, phone, line1, line2, city, region, country, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [u.user_id, data.label, data.recipient, data.phone, data.line1, data.line2 ?? null, data.city, data.region ?? null, data.country, data.is_default ? 1 : 0],
-        );
-        const addressId = (result as { insertId: number }).insertId;
-
-        await logAction(null, "CREATE_CUSTOMER_ADDRESS", "address", addressId, null, {
-          user_id: u.user_id,
-          label: data.label,
-        });
-
-        await c.commit();
-        return { ok: true, address_id: addressId };
-      } catch (e) {
-        await c.rollback().catch(() => {});
-        throw e;
-      }
-    });
-  });
-
-export const updateCustomerAddress = createServerFn({ method: "POST" })
-  .validator((d) =>
-    z
-      .object({
-        address_id: z.number().int(),
-        label: z.string().trim().min(1).max(80).optional(),
-        recipient: z.string().trim().min(1).max(100).optional(),
-        phone: z.string().trim().max(30).optional(),
-        line1: z.string().trim().min(1).max(200).optional(),
-        line2: z.string().trim().max(200).nullable().optional(),
-        city: z.string().trim().min(1).max(100).optional(),
-        region: z.string().trim().max(100).nullable().optional(),
-        country: z.string().trim().min(1).max(80).optional(),
-        is_default: z.boolean().optional(),
-      })
-      .parse(d),
-  )
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    const { address_id, ...fields } = data;
-    return withDb(async (c) => {
-      await c.beginTransaction();
-      try {
-        // Verify ownership
-        const [addr] = await rows<{ address_id: number; user_id: number }>(
-          c,
-          "SELECT address_id, user_id FROM addresses WHERE address_id = ?",
-          [address_id],
-        );
-        if (!addr || addr.user_id !== u.user_id) throw new Error("Address not found.");
-
-        // If setting as default, unset other defaults
-        if (fields.is_default) {
-          await c.execute("UPDATE addresses SET is_default = 0 WHERE user_id = ?", [u.user_id]);
-        }
-
-        const updates: string[] = [];
-        const values: unknown[] = [];
-        for (const [key, value] of Object.entries(fields)) {
-          if (value !== undefined) {
-            updates.push(`${key} = ?`);
-            values.push(value === null ? null : value);
-          }
-        }
-        if (updates.length > 0) {
-          values.push(address_id);
-          await c.execute(`UPDATE addresses SET ${updates.join(", ")} WHERE address_id = ?`, values);
-        }
-
-        await logAction(null, "UPDATE_CUSTOMER_ADDRESS", "address", address_id, null, {
-          user_id: u.user_id,
-          ...fields,
-        });
-
-        await c.commit();
-        return { ok: true };
-      } catch (e) {
-        await c.rollback().catch(() => {});
-        throw e;
-      }
-    });
-  });
-
-export const deleteCustomerAddress = createServerFn({ method: "POST" })
-  .validator((d) => z.object({ address_id: z.number().int() }).parse(d))
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    return withDb(async (c) => {
-      const [addr] = await rows<{ address_id: number; user_id: number; is_default: number }>(
-        c,
-        "SELECT address_id, user_id, is_default FROM addresses WHERE address_id = ?",
-        [data.address_id],
-      );
-      if (!addr || addr.user_id !== u.user_id) throw new Error("Address not found.");
-
-      await c.execute("DELETE FROM addresses WHERE address_id = ?", [data.address_id]);
-
-      // If deleted address was default, make the most recent one default
-      if (addr.is_default) {
-        await c.execute(
-          "UPDATE addresses SET is_default = 1 WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
-          [u.user_id],
-        );
-      }
-
-      await logAction(null, "DELETE_CUSTOMER_ADDRESS", "address", data.address_id, null, {
-        user_id: u.user_id,
-      });
-
-      return { ok: true };
-    });
-  });
-
-export const setDefaultCustomerAddress = createServerFn({ method: "POST" })
-  .validator((d) => z.object({ address_id: z.number().int() }).parse(d))
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    return withDb(async (c) => {
-      const [addr] = await rows<{ address_id: number; user_id: number }>(
-        c,
-        "SELECT address_id, user_id FROM addresses WHERE address_id = ?",
-        [data.address_id],
-      );
-      if (!addr || addr.user_id !== u.user_id) throw new Error("Address not found.");
-
-      await c.execute("UPDATE addresses SET is_default = 0 WHERE user_id = ?", [u.user_id]);
-      await c.execute("UPDATE addresses SET is_default = 1 WHERE address_id = ?", [data.address_id]);
-
-      await logAction(null, "SET_DEFAULT_CUSTOMER_ADDRESS", "address", data.address_id, null, {
-        user_id: u.user_id,
-      });
-
-      return { ok: true };
-    });
-  });
-
-// =============================================================================
-// CUSTOMER FAVORITES
-// =============================================================================
-
-interface FavoriteRow {
-  id: number;
-  user_id: number;
-  product_id: number;
-  created_at: string;
-  product_name?: string;
-  product_price?: number;
-  product_image?: string;
-  product_capacity?: string | null;
-}
-
-export const getCustomerFavorites = createServerFn({ method: "GET" }).handler(async () => {
-  const u = await requireUser();
-  return withDb((c) =>
-    rows<FavoriteRow>(
-      c,
-      `SELECT f.id, f.user_id, f.product_id, f.created_at,
-              p.name as product_name, p.price as product_price, p.image as product_image, p.capacity as product_capacity
-       FROM favorites f
-       JOIN products p ON p.product_id = f.product_id
-       WHERE f.user_id = ? AND (p.deleted_at IS NULL OR p.deleted_at = '0000-00-00 00:00:00')
-       ORDER BY f.created_at DESC`,
-      [u.user_id],
-    ),
-  );
-});
-
-export const toggleCustomerFavorite = createServerFn({ method: "POST" })
-  .validator((d) => z.object({ product_id: z.number().int() }).parse(d))
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    return withDb(async (c) => {
-      // Check if already favorited
-      const [existing] = await rows<{ id: number }>(
-        c,
-        "SELECT id FROM favorites WHERE user_id = ? AND product_id = ?",
-        [u.user_id, data.product_id],
-      );
-
-      if (existing) {
-        // Remove from favorites
-        await c.execute("DELETE FROM favorites WHERE id = ?", [existing.id]);
-        await logAction(null, "REMOVE_CUSTOMER_FAVORITE", "favorite", existing.id, null, {
-          user_id: u.user_id,
-          product_id: data.product_id,
-        });
-        return { ok: true, favorited: false };
-      } else {
-        // Add to favorites
-        const [result] = await c.execute(
-          "INSERT INTO favorites (user_id, product_id) VALUES (?, ?)",
-          [u.user_id, data.product_id],
-        );
-        const favoriteId = (result as { insertId: number }).insertId;
-        await logAction(null, "ADD_CUSTOMER_FAVORITE", "favorite", favoriteId, null, {
-          user_id: u.user_id,
-          product_id: data.product_id,
-        });
-        return { ok: true, favorited: true };
-      }
-    });
-  });
-
-export const removeCustomerFavorite = createServerFn({ method: "POST" })
-  .validator((d) => z.object({ product_id: z.number().int() }).parse(d))
-  .handler(async ({ data }) => {
-    const u = await requireUser();
-    return withDb(async (c) => {
-      await c.execute("DELETE FROM favorites WHERE user_id = ? AND product_id = ?", [u.user_id, data.product_id]);
-      await logAction(null, "REMOVE_CUSTOMER_FAVORITE", "favorite", null, null, {
-        user_id: u.user_id,
-        product_id: data.product_id,
-      });
-      return { ok: true };
-    });
   });

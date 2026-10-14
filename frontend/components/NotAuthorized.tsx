@@ -17,8 +17,8 @@ export function NotAuthorized({
   const { logout } = useStore();
 
   const isStaffOrAdmin = userRole === "admin" || userRole === "staff";
-  const homeTarget = isStaffOrAdmin ? "/admin" : "/dashboard";
-  const homeLabel = isStaffOrAdmin ? "Return to Management Portal" : "Return to Customer Dashboard";
+  const homeTarget = isStaffOrAdmin ? "/admin" : "/";
+  const homeLabel = isStaffOrAdmin ? "Return to Management Portal" : "Return to Storefront";
 
   return (
     <div className="min-h-[70vh] flex items-center justify-center px-4 py-16">

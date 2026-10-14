@@ -5,6 +5,8 @@ import { getRequestHeader, getRequestIP } from "@tanstack/react-start/server";
 const SENSITIVE_KEYS = new Set([
   "password",
   "password_hash",
+  "access_pass",
+  "accesspassword",
   "token",
   "refresh_token",
   "smtp_password",
@@ -15,7 +17,7 @@ const SENSITIVE_KEYS = new Set([
   "session_secret",
 ]);
 
-function redactSensitive(val: unknown): unknown {
+export function redactSensitive(val: unknown): unknown {
   if (val === null || val === undefined) return val;
   if (typeof val !== "object") return val;
   if (Array.isArray(val)) {

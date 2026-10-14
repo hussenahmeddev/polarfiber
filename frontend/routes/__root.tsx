@@ -132,20 +132,17 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const isDashboard =
-    pathname.startsWith("/account") ||
-    pathname.startsWith("/admin") ||
-    pathname.startsWith("/dashboard");
+  const isAdminRoute = pathname.startsWith("/admin");
 
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <StoreProvider>
-        {!isDashboard && <SiteHeader />}
-        <main className={isDashboard ? "min-h-screen" : "min-h-[70vh]"}>
+        {!isAdminRoute && <SiteHeader />}
+        <main className={isAdminRoute ? "min-h-screen" : "min-h-[70vh]"}>
           <Outlet />
         </main>
-        {!isDashboard && <SiteFooter />}
+        {!isAdminRoute && <SiteFooter />}
         <Toaster />
       </StoreProvider>
     </QueryClientProvider>

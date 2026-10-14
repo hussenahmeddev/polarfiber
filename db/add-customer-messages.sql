@@ -19,9 +19,9 @@ CREATE TABLE IF NOT EXISTS customer_conversations (
 );
 
 ALTER TABLE customer_conversations
-  ADD INDEX IF NOT EXISTS idx_customer_conversations_user (user_id),
-  ADD INDEX IF NOT EXISTS idx_customer_conversations_status (status),
-  ADD INDEX IF NOT EXISTS idx_customer_conversations_updated (updated_at);
+  ADD INDEX idx_customer_conversations_user (user_id),
+  ADD INDEX idx_customer_conversations_status (status),
+  ADD INDEX idx_customer_conversations_updated (updated_at);
 
 -- -----------------------------------------------------------------------------
 -- 2. customer_messages  – individual messages within a conversation
@@ -40,9 +40,9 @@ CREATE TABLE IF NOT EXISTS customer_messages (
 );
 
 ALTER TABLE customer_messages
-  ADD INDEX IF NOT EXISTS idx_customer_messages_conversation (conversation_id),
-  ADD INDEX IF NOT EXISTS idx_customer_messages_sender (sender_type, sender_id),
-  ADD INDEX IF NOT EXISTS idx_customer_messages_created (created_at);
+  ADD INDEX idx_customer_messages_conversation (conversation_id),
+  ADD INDEX idx_customer_messages_sender (sender_type, created_at),
+  ADD INDEX idx_customer_messages_created (created_at);
 
 -- =============================================================================
 -- END OF MIGRATION

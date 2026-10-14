@@ -11,6 +11,7 @@ Built with **TanStack Start**, **React 19**, **Vite**, **Tailwind CSS v4**, and 
 - [Overview](#-overview)
 - [Key Features](#-key-features)
 - [Architecture & Tech Stack](#-architecture--tech-stack)
+- [Role-Based Access Control (RBAC)](#-role-based-access-control-rbac)
 - [Project Structure](#-project-structure)
 - [Database & Schema](#-database--schema)
 - [Authentication & Security](#-authentication--security)
@@ -20,7 +21,6 @@ Built with **TanStack Start**, **React 19**, **Vite**, **Tailwind CSS v4**, and 
   - [Environment Variables](#environment-variables)
   - [Database Setup & Seeding](#database-setup--seeding)
   - [Running the Development Server](#running-the-development-server)
-  - [Connecting via MySQL Workbench](#connecting-via-mysql-workbench)
 - [Testing & Quality Assurance](#-testing--quality-assurance)
 - [Deployment & Build](#-deployment--build)
 
@@ -33,8 +33,8 @@ Polar Fiber delivers durable, food-grade water storage solutions engineered to e
 1. **A public storefront & brand portal** mirroring the design, product line, and aesthetic of the official brand.
 2. **An instant quotation engine** allowing potential customers to submit project specifications and inquiries directly from any page.
 3. **A complete e-commerce workflow** featuring client-side cart management and tamper-proof server-side order calculations in Ethiopian Birr (ETB).
-4. **Customer self-service portal** for tracking past orders, order statuses, and quote requests.
-5. **A protected administrative suite** providing complete CRUD over the product catalog, order status management, quote correspondence, and user auditing.
+4. **Public order tracking (`/track-order`)** for customers to verify order progress, delivery details, and item statuses using their order reference and secure access credentials.
+5. **A protected administrative suite (`/admin`)** providing comprehensive management of products, categories, orders, dispatch workflows, customer inquiries, support tickets, inventory audits, and role-based operations.
 
 ---
 
@@ -46,15 +46,20 @@ Polar Fiber delivers durable, food-grade water storage solutions engineered to e
 - **Product Catalog (`/products`)**: Browse water tankers (500L to 25,000L), garden flower pots, fiber roof sheets, and fiber pipes with live pricing, stock availability, and image previews.
 - **Product Details (`/products/$id`)**: Deep-dive product specifications (capacity, food-grade LLDPE material info, UV stabilization, price, and descriptions).
 - **Persistent Shopping Cart (`/cart`)**: Local browser-persisted cart state with item quantity adjustments and instant ETB total calculations.
-- **Secure Checkout**: Orders are authenticated and placed with delivery address validation; order pricing is strictly re-computed against the live database on the server to prevent client-side price tampering.
-- **Customer Dashboard (`/account`)**: Real-time overview of current and past orders with live status badges (`Pending`, `Confirmed`, `In Production`, `Delivered`, `Cancelled`) and submitted quote inquiries.
+- **Secure Checkout & Order Placement**: Orders are placed with delivery address validation; order pricing is strictly re-computed against the live database on the server to prevent client-side price tampering.
+- **Self-Service Order Tracking (`/track-order`)**: Customers track live order fulfillment stages (`Pending`, `Confirmed`, `In Production`, `Delivered`, `Cancelled`) with order reference code and security credentials.
+- **Customer Inquiries & Contact (`/contact`)**: Submit general messages, quotation requests, and direct customer queries with rate limiting and automated logging.
 
-### 🛡️ Administrative Dashboard (`/admin`)
+### 🛡️ Administrative & Operations Suite (`/admin`)
 
-- **Product Catalog Management**: Create new products, edit existing items (name, category, capacity, price, stock, image, description), and remove discontinued lines.
-- **Order Pipeline Tracking**: Monitor all customer orders and advance fulfillment stages from `Pending` through `Delivered`.
-- **Quote Inquiries Desk**: View inbound quote requests, inspect customer contact details and messages, and mark statuses (`New`, `Replied`, `Closed`).
-- **User Directory**: View registered customer profiles, contact phone numbers, roles, and historical order tallies.
+- **Role-Tailored Dashboards**: Granular capability model distinguishing full Administrators from Operational Staff.
+- **Product & Category Catalog**: Full CRUD over catalog items, category hierarchies, image galleries, and pricing controls (restricted to admin).
+- **Order Pipeline & Dispatch Tracking**: Real-time order progress from receipt, internal team notes, payment confirmation, dispatch recording, through delivery confirmation.
+- **Inventory & Stock Adjustments**: Monitor low stock, request stock adjustments, approve/reject adjustment requests with reason tracking, and inspect audit trails.
+- **Quote Inquiries & Conversions**: View inbound quote requests, communicate with potential buyers, and convert quotes directly into confirmed orders.
+- **Customer Messages & Support Tickets**: Manage contact messages (archive, reply, delete) and structured customer support tickets with priority levels and assignment workflows.
+- **Analytics & Reporting**: Sales revenue charts, daily breakdowns, top 10 products sold, and low-stock reports with instant CSV exports.
+- **System Settings & Team Management**: Configure business details, factory contact lines, user role assignments, password policies, and staff profiles.
 
 ---
 
@@ -71,7 +76,28 @@ Polar Fiber delivers durable, food-grade water storage solutions engineered to e
 | **Driver**        | `mysql2/promise`                                                           | Connection-per-request edge-compatible database driver                |
 | **Validation**    | [Zod](https://zod.dev/)                                                    | Strict input parsing and schema verification on client and server     |
 | **Auth**          | Custom HMAC-SHA256 Sessions                                                | HttpOnly server-signed session cookies with bcryptjs password hashing |
-| **Testing**       | [Vitest](https://vitest.dev/) + React Testing Library                      | Unit and component integration tests                                  |
+| **Testing**       | [Vitest](https://vitest.dev/) + React Testing Library                      | Unit, security, and component integration tests                       |
+
+---
+
+## 👥 Role-Based Access Control (RBAC)
+
+The platform implements a security model with distinct capabilities for **Administrators** and **Staff**:
+
+| Capability / Section | Admin Role | Staff Role |
+| :--- | :---: | :---: |
+| **Financial Revenue & Sales Metrics** | Full Access | Hidden |
+| **Product Pricing Edits** | Allowed | Read-Only (Field Disabled) |
+| **Add / Delete Products** | Allowed | Hidden |
+| **Order Status Workflow & Dispatch** | Allowed | Allowed |
+| **Order Deletion & Refunds** | Allowed | Hidden |
+| **Stock Movements & Request Adjustment**| Allowed | Allowed |
+| **Approve / Reject Stock Adjustments** | Allowed | Hidden |
+| **Archive Inquiries & Tickets** | Allowed | Allowed |
+| **Delete Messages / Tickets** | Allowed | Hidden |
+| **Company Business Settings** | Allowed | Hidden |
+| **Team Management & Role Changes** | Allowed | Hidden |
+| **My Profile & Password Change** | Allowed | Allowed (Sole Settings Tab) |
 
 ---
 
@@ -82,6 +108,7 @@ polarfiber/
 ├── backend/                  # Server-only execution layer (never exposed to browser)
 │   ├── api.functions.ts      # TanStack Start server functions (auth, catalog, orders, quotes, admin)
 │   ├── db.server.ts          # MySQL connection lifecycle & SSL PEM normalizer
+│   ├── email.ts              # SMTP mail delivery and templating
 │   ├── session.server.ts     # Cookie signing (HMAC-SHA256), timingSafeEqual verification & RBAC
 │   ├── server.ts             # Framework server entry & error boundaries
 │   ├── start.ts              # TanStack Start router middleware with CSRF protection
@@ -91,7 +118,12 @@ polarfiber/
 ├── frontend/                 # Client UI application (React 19)
 │   ├── components/           # Reusable UI components
 │   │   ├── ui/               # Base primitives (button, dialog, input, label, tabs, textarea, sonner)
+│   │   ├── AdminDashboard.tsx# Comprehensive admin operations suite
+│   │   ├── AdminSidebarLayout.tsx # Navigation sidebar with permissions-aware routing
+│   │   ├── Can.tsx           # Declarative RBAC permission gate component
+│   │   ├── OrderDrawer.tsx   # Detailed order view, notes, audit, and dispatch actions
 │   │   ├── ProductCard.tsx   # Product display card with image and pricing
+│   │   ├── ProductDialog.tsx # Product creation and editing modal
 │   │   ├── QuoteForm.tsx     # Homepage and dedicated quote submission form
 │   │   ├── SiteHeader.tsx    # Branded navigation header and footer
 │   │   └── StatusBadge.tsx   # Visual status badge for orders and quotes
@@ -102,24 +134,33 @@ polarfiber/
 │   │   ├── products.index.tsx# Product catalog with category filter & sorting
 │   │   ├── products.$id.tsx  # Product detail view
 │   │   ├── cart.tsx          # Shopping cart & order placement
-│   │   ├── login.tsx         # Sign in and account registration tabs
-│   │   ├── account.tsx       # Customer order & quote history portal
-│   │   ├── admin.tsx         # Administrator operations dashboard
+│   │   ├── login.tsx         # Staff & Administrator portal sign-in
+│   │   ├── admin.tsx         # Operations dashboard route
+│   │   ├── track-order.tsx   # Public guest order tracking by ID and password
 │   │   ├── quote.tsx         # Standalone quote request page
 │   │   └── contact.tsx       # Contact information, phone lines, and factory location
 │   ├── routeTree.gen.ts      # Auto-generated TanStack route tree
 │   ├── router.tsx            # Router factory initialization
 │   ├── store.tsx             # Global client context (cart localStorage, current session user)
-│   ├── styles.css            # Global CSS styles, fonts, and responsive utilities
-│   └── test/                 # Test suites and Vitest DOM setup
+│   └── test/                 # Vitest test suites (routing, RBAC, orders, transitions)
 │
 ├── shared/                   # Code shared across client and server
-│   └── data.ts               # TypeScript interfaces, constants (CATEGORIES, STATUSES), and ETB helper
+│   ├── data.ts               # TypeScript interfaces, constants (CATEGORIES, STATUSES), and ETB helper
+│   ├── order-access.ts       # Secure password hashing and verification for guest tracking
+│   └── order-status.ts       # State transition rules and validation for orders
+│
+├── utils/                    # Helper utilities
+│   ├── audit.ts              # System audit log recorders
+│   ├── notify.ts             # Email and operational notifications
+│   ├── rate-limit.ts         # In-memory request rate limiting
+│   ├── sanitize.ts           # Input sanitization and XSS prevention
+│   └── stock.ts              # Inventory movement calculations
 │
 ├── db/                       # Database migrations and scripts
 │   ├── schema.sql            # Full MySQL DDL schema
-│   ├── setup.mjs             # Database table creation and product seeder script
-│   └── test-connection.mjs   # Connectivity and SSL verification script
+│   ├── migrate.sql           # Schema migration updates
+│   ├── migrate.mjs           # Automated migration runner
+│   └── setup.mjs             # Database table creation and seeder script
 │
 ├── public/                   # Static assets
 │   ├── images/               # Branded product photography and hero imagery
@@ -136,20 +177,24 @@ polarfiber/
 
 ## 🗄️ Database & Schema
 
-The system uses an **Aiven Cloud MySQL 8** instance with the following normalized schema:
+The system uses an **Aiven Cloud MySQL 8** instance with a normalized relational schema:
 
 ```mermaid
 erDiagram
     CATEGORIES ||--o{ PRODUCTS : categorizes
     USERS ||--o{ USER_ROLES : has
-    USERS ||--o{ ORDERS : places
-    USERS ||--o{ QUOTE_REQUESTS : submits
+    USERS ||--o{ AUDIT_LOGS : performs
     ORDERS ||--|{ ORDER_ITEMS : contains
     PRODUCTS ||--o{ ORDER_ITEMS : includes
+    PRODUCTS ||--o{ STOCK_ADJUSTMENTS : tracks
+    ORDERS ||--o{ ORDER_NOTES : records
+    SUPPORT_TICKETS ||--o{ TICKET_REPLIES : contains
 
     CATEGORIES {
         int category_id PK
         string name UK
+        string slug UK
+        int sort_order
     }
 
     PRODUCTS {
@@ -161,6 +206,7 @@ erDiagram
         int stock
         string image
         text description
+        boolean is_deleted
         timestamp created_at
     }
 
@@ -170,20 +216,24 @@ erDiagram
         string email UK
         string phone
         string password_hash
+        boolean must_change_password
         timestamp created_at
     }
 
     USER_ROLES {
         int user_id PK,FK
-        enum role PK "customer | admin"
+        enum role PK "admin | staff"
     }
 
     ORDERS {
         int order_id PK
-        int user_id FK
+        string customer_name
+        string customer_phone
+        string customer_email
         decimal total
         enum status "Pending | Confirmed | In Production | Delivered | Cancelled"
         string address
+        string access_password_hash
         timestamp created_at
     }
 
@@ -196,35 +246,38 @@ erDiagram
         decimal unit_price
     }
 
-    QUOTE_REQUESTS {
-        int quote_id PK
-        int user_id FK
-        string name
-        string email
+    STOCK_ADJUSTMENTS {
+        int adjustment_id PK
+        int product_id FK
+        int quantity_change
+        string reason
+        enum status "Pending | Approved | Rejected"
+        int requested_by FK
+        timestamp created_at
+    }
+
+    SUPPORT_TICKETS {
+        int ticket_id PK
+        string customer_name
+        string customer_email
         string subject
-        text message
-        enum status "New | Replied | Closed"
+        enum priority "Low | Normal | High | Urgent"
+        enum status "Open | In Progress | Resolved | Closed"
         timestamp created_at
     }
 ```
-
-### Key Schema Design Decisions
-
-1. **Separated `user_roles` Table**: Roles are isolated from the `users` table so profile edits cannot elevate privileges.
-2. **Automatic First-User Admin Bootstrap**: During registration (`register` server function), the very first user created in the database is automatically assigned the `admin` role alongside `customer`.
-3. **Historical Item Preservation**: `order_items` stores the item's unit price and product name at time of purchase. If a product is updated or deleted, past order records remain unchanged.
-4. **Short-Lived Connections**: Each incoming request opens a clean MySQL connection and terminates it immediately via `withDb()` to suit serverless and edge hosting runtimes.
 
 ---
 
 ## 🔒 Authentication & Security
 
-- **Session Cookies**: Upon login or registration, a secure `pf_session` cookie is issued (`httpOnly: true`, `secure: true`, `sameSite: "lax"`, 14-day expiry).
+- **Session Cookies**: Upon login, a secure `pf_session` cookie is issued (`httpOnly: true`, `secure: true`, `sameSite: "lax"`, 14-day expiry).
 - **HMAC Signatures**: Session payloads are signed on the server using `crypto.createHmac("sha256", SESSION_SECRET)`.
 - **Timing-Attack Protection**: Cookie validation utilizes `crypto.timingSafeEqual` to safeguard against timing side-channel attacks.
 - **Password Protection**: Passwords are encrypted using `bcryptjs` with 10 salt rounds.
-- **Server-Side Authorization**: Every administrative endpoint enforces `requireAdmin()` on the server; tampering with frontend state or routes cannot bypass server function protections.
-- **Price Integrity**: Checkout reads `product_id` and recalculates subtotals from the database, ignoring any manipulated client price values.
+- **Server-Side Authorization**: Every administrative endpoint enforces `requireAdmin()` or `requireStaffOrAdmin()` on the server; client-side UI restrictions cannot be bypassed.
+- **Price Integrity**: Checkout reads `product_id` and recalculates subtotals directly from the database, ignoring any manipulated client price values.
+- **Rate Limiting & Sanitization**: Public endpoints (order tracking, contact messages, quote requests) are protected by rate limiters and input sanitizers.
 
 ---
 
@@ -232,31 +285,34 @@ erDiagram
 
 All endpoints are built using TanStack Start's type-safe `createServerFn`:
 
-### Catalog
+### Catalog & Public Services
 
 - `getProducts` (`GET`): Returns full product list with joined category names.
 - `getProduct` (`POST`): Returns a single product by `id`.
+- `getCategories` (`GET`): Returns active categories sorted by display order.
+- `placeOrder` (`POST`): Places an order with items and delivery address, supporting both staff checkout and guest checkout with order access credentials.
+- `submitQuote` (`POST`): Records a quote inquiry linked to user or guest contact details.
+- `getOrderStatusPublic` (`POST`): Allows guest order tracking by order reference and access credentials.
 
 ### Authentication & Sessions
 
-- `getMe` (`GET`): Resolves the currently authenticated user and their active role.
-- `login` (`POST`): Validates email and password, creates session cookie, returns user data.
-- `register` (`POST`): Validates user info, creates account, assigns role (first account = admin), and sets session.
+- `getMe` (`GET`): Resolves the currently authenticated user and their active role (`admin` or `staff`).
+- `login` (`POST`): Validates email and password, creates signed session cookie, returns user data.
 - `logout` (`POST`): Clears session cookie and invalidates client query cache.
+- `changePassword` (`POST`): Securely updates account password and clears password-reset flags.
 
-### Orders & Quotes
+### Admin & Staff Operations (`requireStaffOrAdmin` / `requireAdmin`)
 
-- `placeOrder` (`POST`): Places an order with items and delivery address inside a database transaction.
-- `submitQuote` (`POST`): Records a quote inquiry linked to authenticated user (or guest).
-- `getMyAccount` (`GET`): Retrieves orders and quotes for the signed-in customer.
-
-### Admin Operations (`requireAdmin`)
-
-- `getAdminData` (`GET`): Aggregates all orders, quotes, products, and registered customers.
-- `saveProduct` (`POST`): Inserts (if `product_id === 0`) or updates a product.
-- `deleteProduct` (`POST`): Removes a product by ID.
-- `setOrderStatus` (`POST`): Updates an order status.
-- `setQuoteStatus` (`POST`): Updates a quote inquiry status.
+- `getAdminOverview` (`GET`): Aggregates sales statistics, daily revenue, order statuses, and low-stock indicators.
+- `getOrdersPage` (`GET`): Paginated order listing with status, search, and date filters.
+- `saveProduct` (`POST`): Creates or updates catalog item details (requires admin).
+- `deleteProduct` / `softDeleteProduct` (`POST`): Removes or archives products from the active catalog (requires admin).
+- `setOrderStatus` (`POST`): Validates and advances order lifecycle states.
+- `recordOrderDispatch` & `completeOrderDelivery` (`POST`): Logs fulfillment milestones with driver notes and timestamps.
+- `getStockAdjustments`, `approveStockAdjustment`, `rejectStockAdjustment`: Stock governance workflow with reason logging.
+- `getContactMessages` & `getSupportTickets`: Customer communication and ticketing inbox.
+- `getCompanySettings` & `updateCompanySetting`: Business contact lines, address, and VAT registration configurations.
+- `exportReportCSV` & `exportCustomersCSV`: Data exports formatted for auditing and accounting.
 
 ---
 
@@ -285,6 +341,13 @@ MYSQL_CA_CERT="-----BEGIN CERTIFICATE-----\nMIID...[CA CONTENT]...==\n-----END C
 
 # Session Signing Key
 SESSION_SECRET="your-cryptographically-secure-random-secret"
+
+# Optional SMTP Mail Server Configuration
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=no-reply@example.com
+SMTP_PASS=your-smtp-password
+SMTP_FROM=Polar Fiber <no-reply@example.com>
 ```
 
 > **Note**: The application automatically normalizes multiline or collapsed PEM certificates via `normalizeCa()` in `backend/db.server.ts`.
@@ -297,81 +360,42 @@ Initialize the database tables and populate sample products:
 # Run database migrations and seed catalog items
 node db/setup.mjs
 
-# Verify database connection and SSL handshake
-node db/test-connection.mjs
+# Run incremental migrations (if updating an existing database)
+node db/migrate.mjs
 ```
 
 ### Running the Development Server
 
-Start the local TanStack Start development server:
+Start the local development server with Vite hot-reloading:
 
 ```sh
 npm run dev
 ```
 
-The application will start on **`http://localhost:5173`** (or the port indicated in your terminal).
-
-- Visit `/` to explore the public homepage.
-- Visit `/login` to register an account. **The first user you register automatically becomes the system Administrator!**
-- Access `/admin` when signed in as an administrator to manage products, orders, and inquiries.
-
-### Connecting via MySQL Workbench
-
-If you wish to view or administer the database through MySQL Workbench:
-
-1. **Connection Method**: `Standard (TCP/IP)`
-2. **Hostname**: Paste your `MYSQL_HOST`
-3. **Port**: Paste your `MYSQL_PORT`
-4. **Username**: `avnadmin` (or your `MYSQL_USER`)
-5. **Password**: Click _Store in Vault..._ and paste `MYSQL_PASSWORD`
-6. **SSL Tab**:
-   - Set **Use SSL**: `Require and Verify CA` (or `Require`)
-   - In **SSL CA File**: Browse and select the `aiven-ca.pem` located in the root of this project.
-7. Click **Test Connection**.
+The application will be accessible at `http://localhost:3000`.
 
 ---
 
 ## 🧪 Testing & Quality Assurance
 
-Run the test suite powered by Vitest and JSDOM:
+The test suite covers routing, RBAC permissions, storefront guest workflows, order state transitions, and server-side rules.
 
 ```sh
-# Run tests once
+# Run full Vitest test suite
 npm test
 
 # Run tests in watch mode
 npm run test:watch
 ```
 
-Run code quality and formatting checks:
-
-```sh
-# Linting
-npm run lint
-
-# Code formatting
-npm run format
-```
-
 ---
 
 ## 📦 Deployment & Build
 
-To compile a production build:
+To build the application for production:
 
 ```sh
-# Build client and server bundles
 npm run build
-
-# Preview production build locally
-npm run preview
 ```
 
-The output bundle is optimized and ready for deployment to any Node.js or edge-compatible host supporting TanStack Start (e.g., Nitro, Vercel, Netlify, or Docker).
-
----
-
-## 📄 License & Credits
-
-Developed for **Polar Fiber** (Addis Ababa, Ethiopia).  
-All product trademarks, imagery, and specifications belong to Polar Fiber.
+The production output will be generated in the `.output/` directory, ready to deploy to Node.js environments or edge runtime platforms supporting TanStack Start.

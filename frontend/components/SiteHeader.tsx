@@ -1,6 +1,5 @@
-import { Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
-import { LayoutDashboard, LogOut, Package, ShieldCheck, ShoppingCart, User } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { ShieldCheck, ShoppingCart, User } from "lucide-react";
 import { Button } from "@/frontend/components/ui/button";
 import { useStore } from "@/frontend/store";
 import { ThemeToggle } from "@/frontend/components/ThemeToggle";
@@ -58,14 +57,20 @@ export function SiteHeader() {
             )}
           </Link>
           {user ? (
-            <UserMenu />
+            <Link
+              to="/admin"
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium hover:bg-muted"
+            >
+              <ShieldCheck className="h-4 w-4" />
+              <span className="hidden sm:inline">Dashboard</span>
+            </Link>
           ) : (
             <Link
               to="/login"
               className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium hover:bg-muted"
             >
               <User className="h-4 w-4" />
-              <span className="hidden sm:inline">Sign in</span>
+              <span className="hidden sm:inline">Staff sign in</span>
             </Link>
           )}
         </div>
@@ -94,81 +99,6 @@ export function SiteHeader() {
         ))}
       </nav>
     </header>
-  );
-}
-
-function UserMenu() {
-  const { user, logout } = useStore();
-  const nav = useNavigate();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", esc);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", esc);
-    };
-  }, [open]);
-  if (!user) return null;
-  const isAdmin = user.role === "admin";
-  const isStaff = user.role === "staff";
-  const item =
-    "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-muted";
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium hover:bg-muted"
-      >
-        <span className="grid h-8 w-8 place-items-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
-          {user.name.charAt(0).toUpperCase()}
-        </span>
-        <span className="hidden sm:inline">{user.name.split(" ")[0]}</span>
-      </button>
-      {open && (
-        <div
-          role="menu"
-          className="absolute right-0 z-50 mt-2 w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg"
-        >
-          <div className="border-b px-3 py-2">
-            <p className="truncate text-sm font-semibold">{user.name}</p>
-            <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-          </div>
-          {(isAdmin || isStaff) && (
-            <Link to="/admin" role="menuitem" className={item} onClick={() => setOpen(false)}>
-              <ShieldCheck className="h-4 w-4" /> {isAdmin ? "Admin dashboard" : "Staff portal"}
-            </Link>
-          )}
-          <Link to="/dashboard" role="menuitem" className={item} onClick={() => setOpen(false)}>
-            <LayoutDashboard className="h-4 w-4" /> My dashboard
-          </Link>
-          <Link to="/dashboard/orders" role="menuitem" className={item} onClick={() => setOpen(false)}>
-            <Package className="h-4 w-4" /> My orders
-          </Link>
-          <button
-            type="button"
-            role="menuitem"
-            className={item + " text-destructive"}
-            onClick={async () => {
-              setOpen(false);
-              await logout();
-              nav({ to: "/login", replace: true });
-            }}
-          >
-            <LogOut className="h-4 w-4" /> Sign out
-          </button>
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -215,13 +145,13 @@ export function SiteFooter() {
           <p className="font-semibold">Account</p>
           <ul className="mt-2 space-y-1.5">
             <li>
-              <Link to="/dashboard">My account</Link>
+              <Link to="/track-order">Track order</Link>
             </li>
             <li>
               <Link to="/cart">Cart</Link>
             </li>
             <li>
-              <Link to="/login">Sign in</Link>
+              <Link to="/login">Staff sign in</Link>
             </li>
           </ul>
         </nav>

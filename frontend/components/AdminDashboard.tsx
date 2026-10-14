@@ -16,20 +16,14 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  Legend,
 } from "recharts";
 import {
-  LayoutDashboard,
   Package,
-  Layers,
-  Boxes,
   ShoppingCart,
   FileText,
   Users,
   MessageSquare,
-  HelpCircle,
   BarChart2,
-  ScrollText,
   Settings,
   DollarSign,
   AlertTriangle,
@@ -40,28 +34,17 @@ import {
   Pencil,
   Trash2,
   Mail,
-  Clock,
-  ArrowRight,
   Search,
   Filter,
-  Check,
-  Eye,
   RefreshCw,
   Phone,
   MapPin,
   ShieldCheck,
-  TrendingUp,
-  FileSpreadsheet,
-  AlertCircle,
   Send,
-  Building,
   Save,
   UserPlus,
   History,
-  ThumbsUp,
-  ThumbsDown,
   Archive,
-  ClipboardCheck,
   ChevronUp,
   ChevronDown,
   CreditCard,
@@ -73,16 +56,14 @@ import { Input } from "@/frontend/components/ui/input";
 import { Label } from "@/frontend/components/ui/label";
 import { AdminSidebarLayout } from "@/frontend/components/AdminSidebarLayout";
 import { StatusBadge } from "@/frontend/components/StatusBadge";
-import { DataTable, type Column } from "@/frontend/components/DataTable";
 import { OrderDrawer } from "@/frontend/components/OrderDrawer";
-import { ProductDialog } from "@/frontend/components/ProductDialog";
+import { ProductDialog, ProductImage } from "@/frontend/components/ProductDialog";
 import { ConfirmDialog } from "@/frontend/components/ConfirmDialog";
 import { EmptyState } from "@/frontend/components/EmptyState";
 import { NotAuthorized } from "@/frontend/components/NotAuthorized";
 import { MustChangePasswordModal } from "@/frontend/components/MustChangePasswordModal";
 import { Can } from "@/frontend/components/Can";
 import { usePermissions } from "@/frontend/hooks/usePermissions";
-import { ProductImage } from "@/frontend/components/ProductDialog";
 import {
   CATEGORIES,
   ORDER_STATUSES,
@@ -94,68 +75,77 @@ import {
   type Quote,
   type OrderStatus,
   type QuoteStatus,
-  type CustomerSummary,
-  type StockAdjustment,
-  type ContactMessage as DBContactMessage,
   type SupportTicket as DBSupportTicket,
 } from "@/shared/data";
 import { useStore, productsKey } from "@/frontend/store";
 import {
-  getCategories,
-  saveCategory,
-  deleteCategory,
-  reorderCategories,
-  getStockMovements,
-  convertQuoteToOrder,
-  expireQuotes,
-  markOrderPaid,
+  addOrderInternalNote,
+  approveQuote,
+  approveStockAdjustment,
+  archiveContactMessage,
+  assignSupportTicket,
   blockCustomer,
-  getCustomerDetail,
-  exportCustomersCSV,
-  markMessageRead,
-  getSupportTicketReplies,
+  changePassword,
+  completeOrderDelivery,
+  convertQuoteToOrder,
   createSupportTicket,
-  getSalesReport,
-  exportReportCSV,
-  updateAdminProfile,
+  createTeamMember,
   deactivateTeamMember,
-  editTeamMember,
-  softDeleteProduct,
-  saveProductImages,
-} from "@/backend/api.functions";
-import {
-  getAdminOverview,
-  getOrdersPage,
-  getProducts,
-  getCustomers,
-  getAdminData,
-  saveProduct,
+  deleteCategory,
+  deleteContactMessage,
   deleteProduct,
-  setOrderStatus,
-  setQuoteStatus,
-  updateProductStock,
+  editTeamMember,
+  expireQuotes,
+  exportCustomersCSV,
+  exportReportCSV,
+  getAdminData,
+  getAdminOverview,
+  getAuditLogs,
+  getCategories,
+  getCompanySettings,
+  getContactMessages,
+  getCustomers,
+  getCustomerDetail,
+  getOrdersPage,
+  getOrderStatusHistory,
+  getProducts,
+  getSalesReport,
+  getStockAdjustments,
+  getStockMovements,
+  getSupportTickets,
+  getSupportTicketReplies,
+  logExportAction,
+  markMessageRead,
+  markOrderPaid,
+  recordOrderDispatch,
+  rejectStockAdjustment,
+  reorderCategories,
   replyContactMessage,
   replySupportTicket,
-  getAuditLogs,
-  updateUserRole,
-  addOrderNote,
-  getOrderStatusHistory,
-  getStockAdjustments,
-  approveStockAdjustment,
-  rejectStockAdjustment,
-  getContactMessages,
-  archiveContactMessage,
-  deleteContactMessage,
-  getSupportTickets,
-  assignSupportTicket,
-  updateSupportTicketStatus,
-  approveQuote,
-  getCompanySettings,
+  saveCategory,
+  saveProduct,
+  saveProductImages,
+  setOrderStatus,
+  setQuoteStatus,
+  softDeleteProduct,
+  updateAdminProfile,
   updateCompanySetting,
-  createTeamMember,
-  changePassword,
-  logExportAction,
+  updateProductStock,
+  updateSupportTicketStatus,
+  updateUserRole,
 } from "@/backend/api.functions";
+
+function downloadCsv(content: string, filename: string) {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.setAttribute("href", url);
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
 
 const PIE_COLORS = ["#0ea5e9", "#6366f1", "#10b981", "#f59e0b", "#f43f5e"];
 
@@ -450,10 +440,13 @@ export function AdminDashboard() {
     smtpFrom: "",
   });
   const [settingsSubTab, setSettingsSubTab] = React.useState<"company" | "team" | "profile">(
-    "company",
+    user?.role === "staff" ? "profile" : "company",
   );
   const [companyForm, setCompanyForm] = React.useState<Record<string, string>>({});
   const [profileForm, setProfileForm] = React.useState({
+    name: user?.name ?? "",
+    email: user?.email ?? "",
+    phone: user?.phone ?? "",
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
@@ -544,7 +537,9 @@ export function AdminDashboard() {
   const mutateReplyTicket = useServerFn(replySupportTicket);
   const fetchAuditLogs = useServerFn(getAuditLogs);
   const mutateUserRole = useServerFn(updateUserRole);
-  const mutateAddOrderNote = useServerFn(addOrderNote);
+  const mutateAddOrderNote = useServerFn(addOrderInternalNote);
+  const mutateDispatchOrder = useServerFn(recordOrderDispatch);
+  const mutateCompleteDelivery = useServerFn(completeOrderDelivery);
   const fetchOrderHistory = useServerFn(getOrderStatusHistory);
   const fetchStockAdjustments = useServerFn(getStockAdjustments);
   const mutateApproveStockAdj = useServerFn(approveStockAdjustment);
@@ -585,7 +580,8 @@ export function AdminDashboard() {
   const mutateSoftDeleteProduct = useServerFn(softDeleteProduct);
   const mutateSaveProductImages = useServerFn(saveProductImages);
 
-  const isStaffOrAdmin = user?.role === "admin" || user?.role === "staff";
+  const isStaff = user?.role === "staff";
+  const isStaffOrAdmin = user?.role === "admin" || isStaff;
 
   // Queries
   const overviewQuery = useQuery({
@@ -780,6 +776,42 @@ export function AdminDashboard() {
     }
   };
 
+  const handleDispatchOrder = async (orderId: number) => {
+    setStatusUpdating(true);
+    try {
+      await mutateDispatchOrder({ data: { order_id: orderId } });
+      toast.success(`Order #${orderId} dispatched`);
+      if (selectedOrder && selectedOrder.order_id === orderId) {
+        setSelectedOrder({ ...selectedOrder, status: "Out for Delivery" });
+      }
+      await qc.invalidateQueries({ queryKey: ["admin", "orders"] });
+      await qc.invalidateQueries({ queryKey: ["order-delivery", orderId] });
+      await qc.invalidateQueries({ queryKey: ["admin", "overview"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to dispatch order");
+    } finally {
+      setStatusUpdating(false);
+    }
+  };
+
+  const handleCompleteDelivery = async (orderId: number) => {
+    setStatusUpdating(true);
+    try {
+      await mutateCompleteDelivery({ data: { order_id: orderId } });
+      toast.success(`Order #${orderId} marked delivered`);
+      if (selectedOrder && selectedOrder.order_id === orderId) {
+        setSelectedOrder({ ...selectedOrder, status: "Delivered" });
+      }
+      await qc.invalidateQueries({ queryKey: ["admin", "orders"] });
+      await qc.invalidateQueries({ queryKey: ["order-delivery", orderId] });
+      await qc.invalidateQueries({ queryKey: ["admin", "overview"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to complete delivery");
+    } finally {
+      setStatusUpdating(false);
+    }
+  };
+
   const handleQuoteStatusChange = async (quoteId: number, newStatus: QuoteStatus) => {
     try {
       await mutateQuoteStatus({ data: { id: quoteId, status: newStatus } });
@@ -897,14 +929,7 @@ export function AdminDashboard() {
       o.total,
     ]);
     const csvContent = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `polarfiber_orders_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsv(csvContent, `polarfiber_orders_${new Date().toISOString().slice(0, 10)}.csv`);
     mutateLogExportAction({ data: { count: orders.length } }).catch(() => {});
     toast.success("Orders exported to CSV");
   };
@@ -1516,6 +1541,7 @@ export function AdminDashboard() {
                               className="h-6 w-6 p-0"
                               onClick={async () => {
                                 const prev = arr[idx - 1];
+                                if (!prev) return;
                                 await mutateReorderCategories({
                                   data: {
                                     items: [
@@ -1536,6 +1562,7 @@ export function AdminDashboard() {
                               className="h-6 w-6 p-0"
                               onClick={async () => {
                                 const next = arr[idx + 1];
+                                if (!next) return;
                                 await mutateReorderCategories({
                                   data: {
                                     items: [
@@ -2579,13 +2606,7 @@ export function AdminDashboard() {
                 onClick={() =>
                   fetchExportCustomersCSV()
                     .then((result: any) => {
-                      const blob = new Blob([result.csv], { type: "text/csv" });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement("a");
-                      a.href = url;
-                      a.download = "customers.csv";
-                      a.click();
-                      URL.revokeObjectURL(url);
+                      downloadCsv(result.csv, "customers.csv");
                       toast.success(`Exported ${result.count} customers`);
                     })
                     .catch((e: Error) => toast.error(e.message))
@@ -3368,13 +3389,7 @@ export function AdminDashboard() {
                         fetchExportReportCSV({
                           data: { type: "sales", startDate: reportStart, endDate: reportEnd },
                         } as any).then((r: any) => {
-                          const b = new Blob([r.csv], { type: "text/csv" });
-                          const u2 = URL.createObjectURL(b);
-                          const a = document.createElement("a");
-                          a.href = u2;
-                          a.download = r.filename ?? "report.csv";
-                          a.click();
-                          URL.revokeObjectURL(u2);
+                          downloadCsv(r.csv, r.filename ?? "report.csv");
                         })
                       }
                     >
@@ -3401,13 +3416,7 @@ export function AdminDashboard() {
                         fetchExportReportCSV({
                           data: { type: "products", startDate: reportStart, endDate: reportEnd },
                         } as any).then((r: any) => {
-                          const b = new Blob([r.csv], { type: "text/csv" });
-                          const u2 = URL.createObjectURL(b);
-                          const a = document.createElement("a");
-                          a.href = u2;
-                          a.download = r.filename ?? "products.csv";
-                          a.click();
-                          URL.revokeObjectURL(u2);
+                          downloadCsv(r.csv, r.filename ?? "products.csv");
                         })
                       }
                     >
@@ -3523,13 +3532,7 @@ export function AdminDashboard() {
                         fetchExportReportCSV({
                           data: { type: "low_stock", startDate: reportStart, endDate: reportEnd },
                         } as any).then((r: any) => {
-                          const b = new Blob([r.csv], { type: "text/csv" });
-                          const u2 = URL.createObjectURL(b);
-                          const a = document.createElement("a");
-                          a.href = u2;
-                          a.download = r.filename ?? "low_stock.csv";
-                          a.click();
-                          URL.revokeObjectURL(u2);
+                          downloadCsv(r.csv, r.filename ?? "low_stock.csv");
                         })
                       }
                     >
@@ -3713,35 +3716,41 @@ export function AdminDashboard() {
           <div className="space-y-6 max-w-4xl animate-in fade-in-50 duration-200">
             <div>
               <h1 className="text-2xl font-bold tracking-tight text-foreground">
-                Admin & Business Settings
+                {isStaff ? "My Profile" : "Admin & Business Settings"}
               </h1>
               <p className="text-sm text-muted-foreground mt-1">
-                Configure company details, team members, and alert rules
+                {isStaff
+                  ? "Update your personal profile and account credentials"
+                  : "Configure company details, team members, and alert rules"}
               </p>
             </div>
 
             {/* Sub-tabs */}
             <div className="flex border-b border-border gap-4">
-              <button
-                onClick={() => setSettingsSubTab("company")}
-                className={`pb-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
-                  settingsSubTab === "company"
-                    ? "border-primary text-primary"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Company Settings
-              </button>
-              <button
-                onClick={() => setSettingsSubTab("team")}
-                className={`pb-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer flex items-center gap-2 ${
-                  settingsSubTab === "team"
-                    ? "border-primary text-primary"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Team Management
-              </button>
+              {!isStaff && (
+                <>
+                  <button
+                    onClick={() => setSettingsSubTab("company")}
+                    className={`pb-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
+                      settingsSubTab === "company"
+                        ? "border-primary text-primary"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Company Settings
+                  </button>
+                  <button
+                    onClick={() => setSettingsSubTab("team")}
+                    className={`pb-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer flex items-center gap-2 ${
+                      settingsSubTab === "team"
+                        ? "border-primary text-primary"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Team Management
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => setSettingsSubTab("profile")}
                 className={`pb-3 text-sm font-semibold border-b-2 transition-colors cursor-pointer ${
@@ -3754,7 +3763,7 @@ export function AdminDashboard() {
               </button>
             </div>
 
-            {settingsSubTab === "company" ? (
+            {!isStaff && settingsSubTab === "company" ? (
               <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-6">
                 <h3 className="font-bold text-base text-foreground border-b border-border pb-3">
                   Company & Factory Information
@@ -3983,7 +3992,7 @@ export function AdminDashboard() {
                   </Button>
                 </div>
               </div>
-            ) : (
+            ) : !isStaff && settingsSubTab === "team" ? (
               <div className="space-y-6">
                 {/* Invite Staff Card */}
                 <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-4">
@@ -4191,6 +4200,174 @@ export function AdminDashboard() {
                   </div>
                 </div>
               </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-6">
+                  <div>
+                    <h3 className="font-bold text-base text-foreground border-b border-border pb-3">
+                      My Profile
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Update your own name, email and phone. Password changes are scoped to your
+                      account only.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Full Name</Label>
+                      <Input
+                        value={profileForm.name ?? user?.name ?? ""}
+                        onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Email Address</Label>
+                      <Input
+                        type="email"
+                        value={profileForm.email ?? user?.email ?? ""}
+                        onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Phone Number</Label>
+                      <Input
+                        value={profileForm.phone ?? user?.phone ?? ""}
+                        onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Role</Label>
+                      <Input
+                        value={user?.role === "staff" ? "Staff Member" : "Administrator"}
+                        disabled
+                        className="bg-muted text-muted-foreground"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-border flex justify-end">
+                    <Button
+                      onClick={async () => {
+                        const name = (profileForm.name ?? "").trim();
+                        const email = (profileForm.email ?? "").trim();
+                        if (!name || !email) {
+                          toast.error("Name and email are required.");
+                          return;
+                        }
+                        try {
+                          await mutateUpdateAdminProfile({
+                            data: {
+                              name,
+                              email,
+                              phone: (profileForm.phone ?? "").trim(),
+                            },
+                          });
+                          toast.success("Profile updated successfully!");
+                        } catch (err) {
+                          toast.error(
+                            err instanceof Error ? err.message : "Failed to update profile",
+                          );
+                        }
+                      }}
+                      className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
+                    >
+                      <Save className="h-4 w-4" />
+                      Save Profile
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="bg-card border border-border rounded-2xl p-6 shadow-xs space-y-6">
+                  <div>
+                    <h3 className="font-bold text-base text-foreground border-b border-border pb-3">
+                      Change Password
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Minimum 8 characters. You must confirm your current password first.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label className="text-xs font-semibold">Current Password</Label>
+                      <Input
+                        type="password"
+                        value={profileForm.currentPassword}
+                        onChange={(e) =>
+                          setProfileForm({ ...profileForm, currentPassword: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">New Password</Label>
+                      <Input
+                        type="password"
+                        value={profileForm.newPassword}
+                        onChange={(e) =>
+                          setProfileForm({ ...profileForm, newPassword: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Confirm New Password</Label>
+                      <Input
+                        type="password"
+                        value={profileForm.confirmPassword}
+                        onChange={(e) =>
+                          setProfileForm({ ...profileForm, confirmPassword: e.target.value })
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-border flex justify-end">
+                    <Button
+                      variant="outline"
+                      disabled={
+                        !profileForm.currentPassword ||
+                        !profileForm.newPassword ||
+                        profileForm.newPassword !== profileForm.confirmPassword
+                      }
+                      onClick={async () => {
+                        if (profileForm.newPassword !== profileForm.confirmPassword) {
+                          toast.error("New passwords do not match.");
+                          return;
+                        }
+                        if (profileForm.newPassword.length < 8) {
+                          toast.error("New password must be at least 8 characters.");
+                          return;
+                        }
+                        try {
+                          await mutateChangePassword({
+                            data: {
+                              currentPassword: profileForm.currentPassword,
+                              newPassword: profileForm.newPassword,
+                            },
+                          });
+                          toast.success("Password changed successfully!");
+                          setProfileForm({
+                            name: profileForm.name,
+                            email: profileForm.email,
+                            phone: profileForm.phone,
+                            currentPassword: "",
+                            newPassword: "",
+                            confirmPassword: "",
+                          });
+                        } catch (err) {
+                          toast.error(
+                            err instanceof Error ? err.message : "Failed to change password",
+                          );
+                        }
+                      }}
+                      className="gap-2"
+                    >
+                      <ShieldCheck className="h-4 w-4" />
+                      Update Password
+                    </Button>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         ))}
@@ -4199,7 +4376,7 @@ export function AdminDashboard() {
       {/* MODALS & DRAWERS                                         */}
       {/* ======================================================== */}
 
-      {/* Order Details Drawer */}
+      {/* Order Details Drawer */}{/* Order Details Drawer */}
       <OrderDrawer
         order={selectedOrder}
         open={orderDrawerOpen}
@@ -4209,16 +4386,16 @@ export function AdminDashboard() {
         statusUpdating={statusUpdating}
         onAddNote={async (orderId, note) => {
           try {
-            const res = await mutateAddOrderNote({ data: { order_id: orderId, note } });
+            await mutateAddOrderNote({ data: { order_id: orderId, note } });
             toast.success("Internal note added");
-            if (selectedOrder && selectedOrder.order_id === orderId) {
-              setSelectedOrder({ ...selectedOrder, internal_notes: res.notes });
-            }
+            // The drawer keeps its own note list query and refetches it itself.
             await ordersQuery.refetch();
           } catch (err) {
             toast.error(err instanceof Error ? err.message : "Failed to add internal note");
           }
         }}
+        onDispatch={handleDispatchOrder}
+        onCompleteDelivery={handleCompleteDelivery}
       />
 
       {/* Mark Paid Modal */}
