@@ -57,9 +57,18 @@ function Cart() {
       return;
     }
     if (isGuest) {
-      if (!guestName.trim()) { toast.error("Please enter your name."); return; }
-      if (!guestEmail.trim()) { toast.error("Please enter your email."); return; }
-      if (!guestPhone.trim()) { toast.error("Please enter your phone."); return; }
+      if (!guestName.trim()) {
+        toast.error("Please enter your name.");
+        return;
+      }
+      if (!guestEmail.trim()) {
+        toast.error("Please enter your email.");
+        return;
+      }
+      if (!guestPhone.trim()) {
+        toast.error("Please enter your phone.");
+        return;
+      }
       if (!accessPassword.trim() || accessPassword.length < 6) {
         toast.error("Please set a password (min 6 characters) to track your order.");
         return;
@@ -86,8 +95,8 @@ function Cart() {
       const o = await placeOrder({ data: payload });
       clearCart();
       if (isGuest) {
-        toast.success("Order placed! Use your order number and password to track it.");
-        nav({ to: "/track-order" });
+        toast.success("Order placed! Your order confirmation is ready.");
+        nav({ to: "/order-confirmation", search: { order_id: String(o.order_id) } });
       } else {
         toast.success(`Order #${o.order_id} placed!`);
         nav({ to: "/admin" });

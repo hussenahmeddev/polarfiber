@@ -22,6 +22,7 @@ import {
 import { Button } from "@/frontend/components/ui/button";
 import { StatusBadge } from "@/frontend/components/StatusBadge";
 import { ORDER_STATUSES, etb, type Order, type OrderStatus } from "@/shared/data";
+import { canTransition } from "@/shared/order-status";
 import {
   CheckCircle2,
   Clock,
@@ -38,6 +39,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/frontend/utils";
 import { Can } from "@/frontend/components/Can";
+import { usePermissions } from "@/frontend/hooks/usePermissions";
 
 interface OrderDrawerProps {
   order: Order | null;
@@ -104,6 +106,8 @@ export function OrderDrawer({
   const [noteSubmitting, setNoteSubmitting] = React.useState(false);
   const [messageInput, setMessageInput] = React.useState("");
   const [messageSubmitting, setMessageSubmitting] = React.useState(false);
+  const { hasPermission } = usePermissions();
+  const showFinancials = mode !== "admin" || hasPermission("revenue.view");
 
   const fetchOrderHistory = useServerFn(getOrderStatusHistory);
   const { data: statusHistory } = useQuery({
@@ -491,7 +495,7 @@ export function OrderDrawer({
               <ShoppingBag className="h-4 w-4" />
               Order Items ({order.items.length})
             </span>
-            <span>Total</span>
+            {showFinancials && <span>Total</span>}
           </div>
 
           <div className="divide-y divide-border rounded-xl border border-border bg-card">
@@ -503,20 +507,25 @@ export function OrderDrawer({
                 <div>
                   <p className="font-semibold text-foreground">{item.product_name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {item.quantity} × {etb(item.unit_price)}
+                    Quantity: {item.quantity}
+                    {showFinancials && ` × ${etb(item.unit_price)}`}
                   </p>
                 </div>
-                <p className="font-semibold text-foreground">
-                  {etb(item.quantity * item.unit_price)}
-                </p>
+                {showFinancials && (
+                  <p className="font-semibold text-foreground">
+                    {etb(item.quantity * item.unit_price)}
+                  </p>
+                )}
               </div>
             ))}
           </div>
 
-          <div className="flex items-center justify-between rounded-xl bg-muted/60 p-4">
-            <span className="font-semibold text-foreground">Grand Total:</span>
-            <span className="font-display text-xl font-bold text-primary">{etb(order.total)}</span>
-          </div>
+          {showFinancials && (
+            <div className="flex items-center justify-between rounded-xl bg-muted/60 p-4">
+              <span className="font-semibold text-foreground">Grand Total:</span>
+              <span className="font-display text-xl font-bold text-primary">{etb(order.total)}</span>
+            </div>
+          )}
 
           {/* Internal Notes (Admin & Staff Only) — never shown to customers */}
           {mode === "admin" && (
@@ -785,18 +794,44 @@ export function OrderDrawer({
               <span className="text-xs font-medium text-muted-foreground">
                 Update Order Status:
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {order.status === "Pending" && (
+                  <Button
+                    size="sm"
+                    onClick={() => onStatusChange(order.order_id, "Confirmed")}
+                    disabled={statusUpdating}
+                    className="gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground"
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    Confirm Order
+                  </Button>
+                )}
+                {order.status === "Confirmed" && (
+                  <Button
+                    size="sm"
+                    onClick={() => onStatusChange(order.order_id, "In Production")}
+                    disabled={statusUpdating}
+                    className="gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white"
+                  >
+                    <Factory className="h-4 w-4" />
+                    Start Production
+                  </Button>
+                )}
                 <select
                   value={order.status}
                   disabled={statusUpdating}
                   onChange={(e) => onStatusChange(order.order_id, e.target.value as OrderStatus)}
                   className="h-9 rounded-md border border-input bg-background px-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring"
                 >
-                  {(allowedStatuses ?? ORDER_STATUSES).map((st) => (
-                    <option key={st} value={st}>
-                      {st}
-                    </option>
-                  ))}
+                  {(allowedStatuses ?? ORDER_STATUSES).map((st) => {
+                    const isCurrent = st === order.status;
+                    const isAllowed = isCurrent || canTransition(order.status, st);
+                    return (
+                      <option key={st} value={st} disabled={!isAllowed}>
+                        {st} {isCurrent ? "(Current)" : !isAllowed ? "(Confirm order first)" : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             </div>

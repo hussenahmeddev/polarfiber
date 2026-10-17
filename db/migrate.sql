@@ -89,6 +89,9 @@ ALTER TABLE orders ADD INDEX idx_orders_user_status_created (user_id, status, cr
 -- -----------------------------------------------------------------------------
 -- 6. quote_requests  – add quote_number, phone, updated_at
 -- -----------------------------------------------------------------------------
+-- quote_number must stay NULL-able: MySQL cannot derive it from the AUTO_INCREMENT
+-- id at INSERT time, so every code path inserts first and backfills the value
+-- afterwards (see submitQuote in backend/api.functions.ts).
 ALTER TABLE quote_requests ADD COLUMN quote_number VARCHAR(30) NULL AFTER quote_id;
 ALTER TABLE quote_requests ADD COLUMN phone VARCHAR(30) NULL AFTER email;
 ALTER TABLE quote_requests ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at;
@@ -96,13 +99,33 @@ ALTER TABLE quote_requests ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMES
 -- Back-fill quote_number
 UPDATE quote_requests SET quote_number = CONCAT('PF-QT-', quote_id) WHERE quote_number IS NULL OR quote_number = '';
 
-ALTER TABLE quote_requests MODIFY COLUMN quote_number VARCHAR(30) NOT NULL;
 ALTER TABLE quote_requests ADD UNIQUE KEY uq_quote_requests_quote_number (quote_number);
 
 -- -----------------------------------------------------------------------------
 -- 7. support_tickets  – add 'Closed' to status ENUM
 -- -----------------------------------------------------------------------------
 ALTER TABLE support_tickets MODIFY COLUMN status ENUM('Open','In Progress','Resolved','Closed') NOT NULL DEFAULT 'Open';
+
+-- -----------------------------------------------------------------------------
+-- 7b. quote_requests  – add 'Accepted' to status ENUM
+-- -----------------------------------------------------------------------------
+ALTER TABLE quote_requests MODIFY COLUMN status ENUM('New','Reviewing','Pending Approval','Replied','Accepted','Closed') NOT NULL DEFAULT 'New';
+
+-- -----------------------------------------------------------------------------
+-- 7c. quote_items  – new table for quote line items (products, quantities)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS quote_items (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  quote_id    INT             NOT NULL,
+  product_id  INT             NULL,
+  product_name VARCHAR(150)  NOT NULL,
+  quantity    INT             NOT NULL DEFAULT 1,
+  unit_price  DECIMAL(12,2)   NOT NULL,
+  created_at  TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (quote_id) REFERENCES quote_requests(quote_id) ON DELETE CASCADE,
+  FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE SET NULL,
+  INDEX idx_quote_items_quote (quote_id)
+);
 
 -- -----------------------------------------------------------------------------
 -- 8. addresses  – new table
@@ -168,7 +191,16 @@ ALTER TABLE audit_logs ADD INDEX idx_audit_logs_entity (entity_type, entity_id);
 ALTER TABLE categories ADD COLUMN parent_id INT NULL AFTER category_id;
 ALTER TABLE categories ADD COLUMN sort_order SMALLINT NOT NULL DEFAULT 0 AFTER description;
 
+ALTER TABLE categories ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1 AFTER sort_order;
+
 ALTER TABLE categories ADD CONSTRAINT fk_cat_parent FOREIGN KEY (parent_id) REFERENCES categories(category_id) ON DELETE SET NULL;
+
+-- Seed default categories (idempotent)
+INSERT IGNORE INTO categories (name, slug, sort_order, is_active) VALUES
+  ('Water Tankers', 'water-tankers', 1, 1),
+  ('Flower Pots', 'flower-pots', 2, 1),
+  ('Roof Sheets', 'roof-sheets', 3, 1),
+  ('Fiber Pipes', 'fiber-pipes', 4, 1);
 
 -- -----------------------------------------------------------------------------
 -- 15. quote_requests  – delivery_location
@@ -283,4 +315,9 @@ CREATE TABLE IF NOT EXISTS order_deliveries (
 
 ALTER TABLE notifications ADD COLUMN dedupe_key VARCHAR(100) NULL;
 ALTER TABLE notifications ADD UNIQUE KEY uq_notifications_dedupe (dedupe_key);
+
+-- -----------------------------------------------------------------------------
+-- 19. Quote requests: allow 'Accepted' status in ENUM
+-- -----------------------------------------------------------------------------
+ALTER TABLE quote_requests MODIFY COLUMN status ENUM('New','Reviewing','Pending Approval','Replied','Accepted','Closed') NOT NULL DEFAULT 'New';
 

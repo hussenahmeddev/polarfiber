@@ -172,6 +172,7 @@ async function runFile(label, file) {
 try {
   await runFile("Running forward migration…", "migrate.sql");
   await runFile("Running customer messages migration…", "add-customer-messages.sql");
+  await runFile("Running conversation links migration…", "customer-conversation-links.sql");
   if (failed === 0) {
     console.log(`\n✅  Migration complete — ${applied} statement(s) applied, ${skipped} already present.`);
     console.log("    Guest checkout now works: orders.user_id is nullable and order_access exists.");

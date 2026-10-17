@@ -49,6 +49,9 @@ import {
   ChevronDown,
   CreditCard,
   RotateCcw,
+  Printer,
+  Lock,
+  Eye,
 } from "lucide-react";
 
 import { Button } from "@/frontend/components/ui/button";
@@ -104,6 +107,7 @@ import {
   getCategories,
   getCompanySettings,
   getContactMessages,
+  getContactMessageReplies,
   getCustomers,
   getCustomerDetail,
   getOrdersPage,
@@ -114,6 +118,7 @@ import {
   getStockMovements,
   getSupportTickets,
   getSupportTicketReplies,
+  getQuoteItems,
   logExportAction,
   markMessageRead,
   markOrderPaid,
@@ -125,6 +130,7 @@ import {
   saveCategory,
   saveProduct,
   saveProductImages,
+  saveQuoteItems,
   setOrderStatus,
   setQuoteStatus,
   softDeleteProduct,
@@ -158,6 +164,7 @@ interface CategoryRow {
   parent_id: number | null;
   parent_name: string | null;
   sort_order: number;
+  is_active: number;
   product_count: number;
   created_at: string;
 }
@@ -176,6 +183,7 @@ function CategoryForm({ initial, categories, onClose, onSave, saving }: Category
   const [description, setDescription] = React.useState(initial?.description ?? "");
   const [parentId, setParentId] = React.useState<number | null>(initial?.parent_id ?? null);
   const [sortOrder, setSortOrder] = React.useState(initial?.sort_order ?? 0);
+  const [isActive, setIsActive] = React.useState(initial?.is_active !== 0);
 
   const handleNameChange = (v: string) => {
     setName(v);
@@ -198,6 +206,7 @@ function CategoryForm({ initial, categories, onClose, onSave, saving }: Category
       description: description.trim() || null,
       parent_id: parentId || null,
       sort_order: sortOrder,
+      is_active: isActive,
     });
   };
 
@@ -264,6 +273,18 @@ function CategoryForm({ initial, categories, onClose, onSave, saving }: Category
             min={0}
             className="mt-1"
           />
+        </div>
+        <div className="mt-1 flex items-center gap-2">
+          <input
+            id="is-active"
+            type="checkbox"
+            checked={isActive}
+            onChange={(e) => setIsActive(e.target.checked)}
+            className="h-4 w-4 rounded border-input"
+          />
+          <Label htmlFor="is-active" className="text-xs font-semibold">
+            Active (visible in storefront filters)
+          </Label>
         </div>
       </div>
       <div className="flex justify-end gap-2 pt-2">
@@ -366,7 +387,7 @@ export function AdminDashboard() {
 
   // Orders State
   const [ordersPage, setOrdersPage] = React.useState(1);
-  const [ordersPageSize] = React.useState(10);
+  const [ordersPageSize, setOrdersPageSize] = React.useState(10);
   const [ordersSearch, setOrdersSearch] = React.useState("");
   const [ordersStatus, setOrdersStatus] = React.useState("all");
   const [selectedOrder, setSelectedOrder] = React.useState<Order | null>(null);
@@ -403,6 +424,7 @@ export function AdminDashboard() {
   const [selectedMessage, setSelectedMessage] = React.useState<any | null>(null);
   const [messageSearch, setMessageSearch] = React.useState("");
   const [replyText, setReplyText] = React.useState("");
+  const [messageReplyInternal, setMessageReplyInternal] = React.useState(false);
 
   // Support Tickets State
   const [ticketSearch, setTicketSearch] = React.useState("");
@@ -485,6 +507,15 @@ export function AdminDashboard() {
   const [quoteValidUntil, setQuoteValidUntil] = React.useState("");
   const [quoteReplyMsg, setQuoteReplyMsg] = React.useState("");
   const [quoteSending, setQuoteSending] = React.useState(false);
+  const [quoteItems, setQuoteItems] = React.useState<any[]>([]);
+  const [quoteItemEditing, setQuoteItemEditing] = React.useState<{
+    id?: number;
+    product_id: number | null;
+    product_name: string;
+    quantity: string;
+    unit_price: string;
+  } | null>(null);
+  const [savingQuoteItems, setSavingQuoteItems] = React.useState(false);
 
   // Customer detail
   const [customerDetailUserId, setCustomerDetailUserId] = React.useState<number | null>(null);
@@ -563,11 +594,14 @@ export function AdminDashboard() {
   const mutateReorderCategories = useServerFn(reorderCategories);
   const fetchStockMovements = useServerFn(getStockMovements);
   const mutateExpireQuotes = useServerFn(expireQuotes);
+  const fetchQuoteItems = useServerFn(getQuoteItems);
+  const mutateSaveQuoteItems = useServerFn(saveQuoteItems);
   const mutateMarkOrderPaid = useServerFn(markOrderPaid);
   const mutateBlockCustomer = useServerFn(blockCustomer);
   const fetchCustomerDetail = useServerFn(getCustomerDetail);
   const fetchExportCustomersCSV = useServerFn(exportCustomersCSV);
   const mutateMarkMessageRead = useServerFn(markMessageRead);
+  const fetchContactMessageReplies = useServerFn(getContactMessageReplies);
   const fetchSupportTicketReplies = useServerFn(getSupportTicketReplies);
   const mutateCreateSupportTicket = useServerFn(createSupportTicket);
   const fetchSalesReport = useServerFn(getSalesReport);
@@ -582,6 +616,7 @@ export function AdminDashboard() {
 
   const isStaff = user?.role === "staff";
   const isStaffOrAdmin = user?.role === "admin" || isStaff;
+  const canViewRevenue = user?.role === "admin" || hasPermission("revenue.view");
 
   // Queries
   const overviewQuery = useQuery({
@@ -639,6 +674,13 @@ export function AdminDashboard() {
     queryFn: () => fetchContactMessages(),
     enabled: isStaffOrAdmin,
     staleTime: 60_000,
+  });
+
+  const contactMessageRepliesQuery = useQuery({
+    queryKey: ["admin", "message-replies", selectedMessage?.id],
+    queryFn: () =>
+      fetchContactMessageReplies({ data: { message_id: selectedMessage!.id } } as any),
+    enabled: isStaffOrAdmin && !!selectedMessage?.id,
   });
 
   const supportTicketsQuery = useQuery({
@@ -711,6 +753,22 @@ export function AdminDashboard() {
     }
   }, [companySettingsQuery.data]);
 
+  // Load line items for the selected quote
+  React.useEffect(() => {
+    if (!selectedQuote) {
+      setQuoteItems([]);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await fetchQuoteItems({ data: { quote_id: selectedQuote.quote_id } });
+        setQuoteItems(res ?? []);
+      } catch {
+        setQuoteItems([]);
+      }
+    })();
+  }, [selectedQuote]);
+
   // Non-staff/admin guard
   if (!user || !isStaffOrAdmin) {
     return (
@@ -735,23 +793,27 @@ export function AdminDashboard() {
   const allOrders = ordersQuery.data?.orders ?? [];
   const allQuotes = adminDataQuery.data?.quotes ?? [];
 
-  // Delivered revenue — comes directly from the overview KPI (SQL: WHERE status='Delivered')
-  const deliveredRevenue = kpis?.totalRevenue ?? 0;
-  const completedOrdersCount =
-    overview?.statusDistribution?.find((s) => s.status === "Delivered")?.count ?? 0;
-
-  // Low stock items count
-  const lowStockCount =
-    allProducts.filter((p) => p.stock <= 5).length || (kpis?.lowStockCount ?? 0);
-
-  // Unread messages count from live query
   const dbMessages = (contactMessagesQuery.data ?? []) as any[];
+
+  // All KPIs come directly from backend SQL aggregations (getAdminOverview) with fallbacks to loaded collections
+  const totalOrdersCount = kpis?.totalOrders ?? (ordersQuery.data?.total || allOrders.length);
+  const pendingOrderCount =
+    kpis?.pendingOrders ?? allOrders.filter((o: any) => o.status === "Pending").length;
+  const completedOrdersCount =
+    kpis?.completedOrders ?? allOrders.filter((o: any) => o.status === "Delivered").length;
+  const newQuotesCount =
+    kpis?.newQuotes ?? allQuotes.filter((q: any) => q.status === "New").length;
+  const lowStockCount =
+    kpis?.lowStockCount ?? allProducts.filter((p: any) => (p.stock ?? 0) <= 5).length;
   const unreadMessagesCount =
-    dbMessages.length > 0 ? dbMessages.filter((m: any) => !m.is_read).length : 0;
+    kpis?.unreadMessages ?? dbMessages.filter((m: any) => !m.is_read).length;
+  const customerCount =
+    kpis?.customers ?? allCustomers.length;
+  const deliveredRevenue = kpis?.totalRevenue ?? 0;
 
   // Recent Orders & Quotes
   const recentOrdersList = (
-    attention?.pendingOrders.length ? attention.pendingOrders : allOrders
+    attention?.pendingOrders?.length ? attention.pendingOrders : allOrders
   ).slice(0, 5);
   const recentQuotesList = (attention?.newQuotes.length ? attention.newQuotes : allQuotes).slice(
     0,
@@ -770,7 +832,12 @@ export function AdminDashboard() {
       await qc.invalidateQueries({ queryKey: ["admin", "orders"] });
       await qc.invalidateQueries({ queryKey: ["admin", "overview"] });
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update order status");
+      let msg = err instanceof Error ? err.message : "Failed to update order status";
+      if (msg.includes("Invalid order status transition from Pending to In Production")) {
+        msg =
+          "Order must first be Confirmed before entering In Production (Pending → Confirmed → In Production).";
+      }
+      toast.error(msg);
     } finally {
       setStatusUpdating(false);
     }
@@ -934,6 +1001,91 @@ export function AdminDashboard() {
     toast.success("Orders exported to CSV");
   };
 
+  const printInvoice = (order: Order) => {
+    const itemsHtml = order.items
+      .map(
+        (i) => `
+      <tr>
+        <td>${i.product_name}</td>
+        <td style="text-align:center">${i.quantity}</td>
+        <td style="text-align:right">${etb(i.unit_price)}</td>
+        <td style="text-align:right">${etb(i.unit_price * i.quantity)}</td>
+      </tr>
+    `,
+      )
+      .join("");
+
+    const invoiceHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>Invoice #${order.order_id}</title>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .header { display: flex; justify-content: space-between; margin-bottom: 32px; }
+        .logo { font-size: 24px; font-weight: bold; color: #0ea5e9; }
+        .invoice-title { font-size: 20px; font-weight: bold; text-align: right; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+        th { background: #f1f5f9; text-align: left; padding: 8px; border: 1px solid #e2e8f0; }
+        td { padding: 8px; border: 1px solid #e2e8f0; }
+        .total-row { font-weight: bold; background: #f8fafc; }
+        .footer { margin-top: 40px; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 16px; }
+        .print-only { display: block; }
+        @media print { body { -webkit-print-color-adjust: exact; } }
+      </style>
+    </head>
+    <body>
+      <div style="max-width: 800px; margin: 0 auto; padding: 32px;">
+        <div class="header">
+          <div class="logo">Polar Fiber</div>
+          <div class="invoice-title">Invoice #${order.order_id}</div>
+        </div>
+        <div style="margin-bottom: 32px;">
+          <div><strong>Customer:</strong> ${order.customer ?? "Guest"}</div>
+          <div><strong>Date:</strong> ${order.created_at}</div>
+          <div><strong>Status:</strong> ${order.status}</div>
+          <div><strong>Payment:</strong> ${order.payment_method ?? "—"} (${
+        order.is_paid ? "Paid" : "Unpaid"
+      })</div>
+          <div><strong>Address:</strong> ${order.address}</div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th style="text-align:center">Qty</th>
+              <th style="text-align:right">Unit Price</th>
+              <th style="text-align:right">Total</th>
+            </tr>
+          </thead>
+          <tbody>${itemsHtml}</tbody>
+          <tfoot>
+            <tr class="total-row">
+              <td colspan="3" style="text-align:right">Order Total</td>
+              <td style="text-align:right">${etb(order.total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+        <div class="footer">
+          Polar Fiber Manufacturing PLC · Addis Ababa, Ethiopia<br />
+          Thank you for your business!
+        </div>
+      </div>
+      <script>window.print();</script>
+    </body>
+    </html>
+    `;
+
+    const win = window.open("", "_blank");
+    if (!win) {
+      toast.error("Unable to open print window. Please allow popups.");
+      return;
+    }
+    win.document.write(invoiceHtml);
+    win.document.close();
+  };
+
   // Filtering products
   const filteredProducts = allProducts.filter((p) => {
     const matchesSearch =
@@ -1009,10 +1161,9 @@ export function AdminDashboard() {
         });
 
   // Sidebar badges — orders shows pending count, not total
-  const pendingOrderCount = attention?.pendingOrders.length ?? 0;
   const sidebarBadges = {
     orders: pendingOrderCount > 0 ? String(pendingOrderCount) : undefined,
-    quotes: attention?.newQuotes.length ? String(attention.newQuotes.length) : undefined,
+    quotes: kpis?.newQuotes ? String(kpis.newQuotes) : undefined,
     inventory: lowStockCount > 0 ? `${lowStockCount} low` : undefined,
     messages: unreadMessagesCount > 0 ? String(unreadMessagesCount) : undefined,
   };
@@ -1027,13 +1178,19 @@ export function AdminDashboard() {
           {/* Header Title & Subtitle */}
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              Dashboard Overview
+              {isStaff ? "Staff Overview" : "Dashboard Overview"}
             </h1>
-            <p className="text-sm text-muted-foreground mt-1">Monitor your business at a glance</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              {isStaff ? "Live operational metrics and active queues" : "Monitor your business at a glance"}
+            </p>
           </div>
 
-          {/* 8 Stat Cards in 4x2 Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4.5">
+          {/* Stat Cards Grid: 8 cards for admin, 7 cards for staff */}
+          <div
+            className={`grid grid-cols-1 sm:grid-cols-2 ${
+              hasPermission("revenue.view") ? "lg:grid-cols-4" : "lg:grid-cols-3 xl:grid-cols-4"
+            } gap-4.5`}
+          >
             {/* 1. Total Orders */}
             <div
               onClick={() => setActiveTab("orders")}
@@ -1042,7 +1199,7 @@ export function AdminDashboard() {
               <div>
                 <p className="text-xs font-semibold text-muted-foreground">Total Orders</p>
                 <p className="text-3xl font-bold text-foreground mt-1.5">
-                  {kpis?.totalOrders ?? 0}
+                  {totalOrdersCount}
                 </p>
               </div>
               <div className="h-13 w-13 rounded-2xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
@@ -1061,7 +1218,7 @@ export function AdminDashboard() {
               <div>
                 <p className="text-xs font-semibold text-muted-foreground">Pending Orders</p>
                 <p className="text-3xl font-bold text-foreground mt-1.5">
-                  {attention?.pendingOrders.length ?? 0}
+                  {pendingOrderCount}
                 </p>
               </div>
               <div className="h-13 w-13 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-500 group-hover:scale-105 transition-transform">
@@ -1094,9 +1251,9 @@ export function AdminDashboard() {
             >
               <div>
                 <p className="text-xs font-semibold text-muted-foreground">Pending Quotes</p>
-                <p className="text-3xl font-bold text-foreground mt-1.5">
-                  {attention?.newQuotes.length ?? 0}
-                </p>
+                  <p className="text-3xl font-bold text-foreground mt-1.5">
+                    {newQuotesCount}
+                  </p>
               </div>
               <div className="h-13 w-13 rounded-2xl bg-teal-50 flex items-center justify-center text-teal-500 group-hover:scale-105 transition-transform">
                 <FileText className="h-6 w-6 stroke-[2]" />
@@ -1110,7 +1267,7 @@ export function AdminDashboard() {
             >
               <div>
                 <p className="text-xs font-semibold text-muted-foreground">Customers</p>
-                <p className="text-3xl font-bold text-foreground mt-1.5">{allCustomers.length}</p>
+                <p className="text-3xl font-bold text-foreground mt-1.5">{customerCount}</p>
               </div>
               <div className="h-13 w-13 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-500 group-hover:scale-105 transition-transform">
                 <Users className="h-6 w-6 stroke-[2]" />
@@ -1207,7 +1364,13 @@ export function AdminDashboard() {
                               {ord.customer ?? "Guest"}
                             </p>
                           </div>
-                          <span className="text-sm font-bold text-primary">{etb(ord.total)}</span>
+                          {hasPermission("revenue.view") ? (
+                            <span className="text-sm font-bold text-primary">{etb(ord.total)}</span>
+                          ) : (
+                            <span className="text-xs font-semibold text-muted-foreground bg-muted/60 px-2.5 py-1 rounded-md">
+                              {ord.items?.length ?? 0} {ord.items?.length === 1 ? "item" : "items"}
+                            </span>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1511,19 +1674,47 @@ export function AdminDashboard() {
             <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-xs">
               <table className="w-full text-sm text-left">
                 <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  <tr>
-                    <th className="px-5 py-4">Order</th>
-                    <th className="px-5 py-4">Name / Slug</th>
-                    <th className="px-5 py-4">Parent</th>
-                    <th className="px-5 py-4">Products</th>
-                    <th className="px-5 py-4 text-right">Actions</th>
-                  </tr>
+                    <tr>
+                      <th className="px-5 py-4">Order</th>
+                      <th className="px-5 py-4">Name / Slug</th>
+                      <th className="px-5 py-4">Parent</th>
+                      <th className="px-5 py-4">Products</th>
+                      <th className="px-5 py-4">Active</th>
+                      <th className="px-5 py-4 text-right">Actions</th>
+                    </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {((categoriesQuery.data ?? []) as CategoryRow[]).length === 0 ? (
+                  {categoriesQuery.isLoading ? (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-muted-foreground text-sm">
+                        <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-primary" />
+                        Loading categories...
+                      </td>
+                    </tr>
+                  ) : categoriesQuery.isError ? (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-rose-500 text-sm">
+                        <AlertTriangle className="h-5 w-5 mx-auto mb-2 text-rose-500" />
+                        <p className="font-semibold">Failed to load categories</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {categoriesQuery.error instanceof Error
+                            ? categoriesQuery.error.message
+                            : "An unexpected error occurred."}
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => categoriesQuery.refetch()}
+                          className="mt-3 text-xs"
+                        >
+                          Retry
+                        </Button>
+                      </td>
+                    </tr>
+                  ) : ((categoriesQuery.data ?? []) as CategoryRow[]).length === 0 ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={6}
                         className="py-12 text-center text-muted-foreground/60 text-sm"
                       >
                         No categories yet.
@@ -1585,19 +1776,59 @@ export function AdminDashboard() {
                         <td className="px-5 py-3 text-muted-foreground text-xs">
                           {cat.parent_name ?? "—"}
                         </td>
+                        <td className="px-5 py-3 text-xs">
+                          <span className="font-semibold text-foreground">{cat.product_count}</span>{" "}
+                          <span className="text-muted-foreground">
+                            {cat.product_count === 1 ? "product" : "products"}
+                          </span>
+                        </td>
                         <td className="px-5 py-3">
                           <span
-                            className={`px-2 py-0.5 rounded-full text-xs font-semibold ${cat.product_count > 0 ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}
+                            className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                              cat.is_active !== 0
+                                ? "bg-emerald-100 text-emerald-800"
+                                : "bg-rose-100 text-rose-800"
+                            }`}
                           >
-                            {cat.product_count} SKUs
+                            {cat.is_active !== 0 ? "Active" : "Inactive"}
                           </span>
                         </td>
                         <td className="px-5 py-3 text-right">
-                          <div className="inline-flex gap-1">
+                          <div className="inline-flex items-center justify-end gap-1.5">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2.5 text-xs font-medium"
+                              onClick={async () => {
+                                try {
+                                  await mutateSaveCategory({
+                                    data: {
+                                      ...cat,
+                                      is_active: cat.is_active === 0,
+                                    },
+                                  } as any);
+                                  toast.success(
+                                    `Category ${cat.is_active === 0 ? "activated" : "deactivated"}`,
+                                  );
+                                  categoriesQuery.refetch();
+                                } catch (err) {
+                                  toast.error(
+                                    err instanceof Error ? err.message : "Failed to toggle category",
+                                  );
+                                }
+                              }}
+                            >
+                              {cat.is_active !== 0 ? (
+                                <span className="text-xs text-rose-600">Deactivate</span>
+                              ) : (
+                                <span className="text-xs text-emerald-600">Activate</span>
+                              )}
+                            </Button>
                             <Button
                               size="sm"
                               variant="ghost"
                               className="h-8 w-8 p-0"
+                              title="Edit category"
                               onClick={() => {
                                 setEditingCategory(cat);
                                 setCategoryDialogOpen(true);
@@ -2166,15 +2397,17 @@ export function AdminDashboard() {
                 Track customer orders, manage statuses, and export fulfillment records
               </p>
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={exportOrdersCSV}
-              className="gap-2 text-muted-foreground bg-card"
-            >
-              <Download className="h-4 w-4" />
-              Export CSV
-            </Button>
+            <Can permission="reports.export">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={exportOrdersCSV}
+                className="gap-2 text-muted-foreground bg-card"
+              >
+                <Download className="h-4 w-4" />
+                Export CSV
+              </Button>
+            </Can>
           </div>
 
           <div className="flex flex-col sm:flex-row items-center gap-3">
@@ -2254,19 +2487,80 @@ export function AdminDashboard() {
                           <StatusBadge s={o.status} />
                         </td>
                         <td className="px-5 py-4 text-right">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-xs text-primary font-semibold"
-                          >
-                            Manage
-                          </Button>
+                          <div className="inline-flex gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-xs text-primary font-semibold"
+                              onClick={() => {
+                                setSelectedOrder(o);
+                                setOrderDrawerOpen(true);
+                              }}
+                            >
+                              Manage
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-xs text-primary font-semibold h-8 w-8 p-0"
+                              onClick={() => printInvoice(o)}
+                              title="Print Invoice"
+                            >
+                              <Printer className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pt-4 border-t border-border">
+            <div className="text-sm text-muted-foreground">
+              Showing {allOrders.length} of {ordersQuery.data?.total ?? 0} orders
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <span>Per page:</span>
+                <select
+                  value={ordersPageSize}
+                  onChange={(e) => {
+                    setOrdersPageSize(Number(e.target.value));
+                    setOrdersPage(1);
+                  }}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={ordersPage <= 1}
+                  onClick={() => setOrdersPage((p) => Math.max(1, p - 1))}
+                >
+                  Previous
+                </Button>
+                <span className="text-sm font-medium text-muted-foreground">
+                  Page {ordersPage} of {Math.max(1, ordersQuery.data?.totalPages ?? 1)}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={ordersPage >= Math.max(1, ordersQuery.data?.totalPages ?? 1)}
+                  onClick={() => setOrdersPage((p) => p + 1)}
+                >
+                  Next
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -2414,6 +2708,75 @@ export function AdminDashboard() {
                         {selectedQuote.message}
                       </div>
                     </div>
+
+                    {/* Quote Line Items */}
+                    <div>
+                      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                        Requested Items ({quoteItems.length})
+                      </h4>
+                      <div className="mt-2 rounded-xl border border-border bg-card overflow-hidden">
+                        {quoteItems.length === 0 ? (
+                          <p className="p-3 text-xs text-muted-foreground/70 text-center">
+                            No line items specified in this quote yet.
+                          </p>
+                        ) : (
+                          <table className="w-full text-sm border-collapse">
+                            <thead>
+                              <tr className="bg-muted/50 border-b border-border">
+                                <th className="px-3 py-2 text-left text-xs text-muted-foreground font-medium">
+                                  Product
+                                </th>
+                                <th className="px-3 py-2 text-right text-xs text-muted-foreground font-medium">
+                                  Qty
+                                </th>
+                                <th className="px-3 py-2 text-right text-xs text-muted-foreground font-medium">
+                                  Unit Price
+                                </th>
+                                <th className="px-3 py-2 text-right text-xs text-muted-foreground font-medium">
+                                  Total
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {quoteItems.map((item) => (
+                                <tr key={item.id} className="border-b border-border hover:bg-muted/30">
+                                  <td className="px-3 py-2 text-foreground text-xs font-medium">
+                                    {item.product_name}
+                                    {item.product_id ? (
+                                      <span className="text-muted-foreground/50 text-[10px] ml-1">
+                                        (#{item.product_id})
+                                      </span>
+                                    ) : null}
+                                  </td>
+                                  <td className="px-3 py-2 text-right text-xs text-foreground">
+                                    {item.quantity}
+                                  </td>
+                                  <td className="px-3 py-2 text-right text-xs text-foreground">
+                                    {etb(item.unit_price)}
+                                  </td>
+                                  <td className="px-3 py-2 text-right text-xs text-foreground font-medium">
+                                    {etb(item.unit_price * item.quantity)}
+                                  </td>
+                                </tr>
+                              ))}
+                              <tr className="bg-muted/50 border-t border-border">
+                                <td colSpan={3} className="px-3 py-2 text-right text-xs font-semibold text-foreground">
+                                  Items Total
+                                </td>
+                                <td className="px-3 py-2 text-right text-xs font-semibold text-primary">
+                                  {etb(
+                                    quoteItems.reduce(
+                                      (sum, it) => sum + it.unit_price * it.quantity,
+                                      0,
+                                    ),
+                                  )}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
@@ -2446,11 +2809,24 @@ export function AdminDashboard() {
                       >
                         Close
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleQuoteStatusChange(selectedQuote.quote_id, "Accepted")}
+                        disabled={selectedQuote.status === "Accepted"}
+                      >
+                        Accept
+                      </Button>
                     </div>
                   </div>
 
                   {/* Quote Response Panel */}
-                  {["New", "Replied", "Reviewing"].includes(selectedQuote.status) && (
+                  {[
+                    "New",
+                    "Replied",
+                    "Reviewing",
+                    "Accepted",
+                  ].includes(selectedQuote.status) && (
                     <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-3 mt-2">
                       <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                         Send Quote Response
@@ -2557,6 +2933,106 @@ export function AdminDashboard() {
                             Convert to Order
                           </Button>
                         </Can>
+                      </div>
+
+                      {/* Add / Edit Line Items */}
+                      <div className="mt-3 border border-border rounded-xl p-3 bg-card">
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                            Line Items
+                          </h4>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setQuoteItemEditing(null)}
+                            disabled={savingQuoteItems}
+                          >
+                            <Plus className="h-3 w-3" /> Add Item
+                          </Button>
+                        </div>
+                        {quoteItemEditing ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+                            <Input
+                              value={quoteItemEditing.product_name}
+                              onChange={(e) =>
+                                setQuoteItemEditing({
+                                  ...quoteItemEditing,
+                                  product_name: e.target.value,
+                                })
+                              }
+                              placeholder="Product name"
+                              className="h-8 text-xs"
+                            />
+                            <Input
+                              type="number"
+                              value={quoteItemEditing.quantity}
+                              onChange={(e) =>
+                                setQuoteItemEditing({ ...quoteItemEditing, quantity: e.target.value })
+                              }
+                              placeholder="Qty"
+                              className="h-8 text-xs"
+                            />
+                            <Input
+                              type="number"
+                              value={quoteItemEditing.unit_price}
+                              onChange={(e) =>
+                                setQuoteItemEditing({
+                                  ...quoteItemEditing,
+                                  unit_price: e.target.value,
+                                })
+                              }
+                              placeholder="Unit price"
+                              className="h-8 text-xs"
+                            />
+                            <Button
+                              size="sm"
+                              onClick={async () => {
+                                setSavingQuoteItems(true);
+                                try {
+                                  const next = [
+                                    ...quoteItems.filter((i) => i.id !== quoteItemEditing?.id),
+                                    {
+                                      product_id: quoteItemEditing?.product_id ?? null,
+                                      product_name: quoteItemEditing!.product_name,
+                                      quantity: Number(quoteItemEditing!.quantity),
+                                      unit_price: Number(quoteItemEditing!.unit_price),
+                                    },
+                                  ];
+                                  await mutateSaveQuoteItems({
+                                    data: { quote_id: selectedQuote!.quote_id, items: next },
+                                  } as any);
+                                  setQuoteItems(next);
+                                  setQuoteItemEditing(null);
+                                  toast.success("Line item saved");
+                                  await qc.invalidateQueries({ queryKey: ["admin", "data"] });
+                                } catch (err) {
+                                  toast.error(
+                                    err instanceof Error ? err.message : "Failed to save line item",
+                                  );
+                                } finally {
+                                  setSavingQuoteItems(false);
+                                }
+                              }}
+                              disabled={savingQuoteItems || !quoteItemEditing?.product_name || !quoteItemEditing?.quantity || !quoteItemEditing?.unit_price}
+                              className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setQuoteItemEditing(null)}
+                              className="text-xs"
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground/70">
+                            Click "Add Item" to define requested products and quantities for this
+                            quote.
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
@@ -2756,12 +3232,14 @@ export function AdminDashboard() {
                           {(customerDetailQuery.data as any).orders_count}
                         </p>
                       </div>
-                      <div>
-                        <span className="text-xs text-gray-500">Total Spent</span>
-                        <p className="font-semibold">
-                          {etb((customerDetailQuery.data as any).total_spent)}
-                        </p>
-                      </div>
+                      {canViewRevenue && (
+                        <div>
+                          <span className="text-xs text-gray-500">Total Spent</span>
+                          <p className="font-semibold">
+                            {etb((customerDetailQuery.data as any).total_spent)}
+                          </p>
+                        </div>
+                      )}
                     </div>
                     <Can permission="customers.block">
                       <Button
@@ -2803,7 +3281,7 @@ export function AdminDashboard() {
                         <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
                           <tr>
                             <th className="px-4 py-3">#</th>
-                            <th className="px-4 py-3">Total</th>
+                            {canViewRevenue && <th className="px-4 py-3">Total</th>}
                             <th className="px-4 py-3">Status</th>
                             <th className="px-4 py-3">Date</th>
                           </tr>
@@ -2812,7 +3290,7 @@ export function AdminDashboard() {
                           {((customerDetailQuery.data as any).recent_orders ?? []).length === 0 ? (
                             <tr>
                               <td
-                                colSpan={4}
+                                colSpan={canViewRevenue ? 4 : 3}
                                 className="py-6 text-center text-muted-foreground/60 text-sm"
                               >
                                 No orders yet.
@@ -2823,12 +3301,112 @@ export function AdminDashboard() {
                               (o: any) => (
                                 <tr key={o.order_id}>
                                   <td className="px-4 py-3">#{o.order_id}</td>
-                                  <td className="px-4 py-3 font-semibold">{etb(o.total)}</td>
+                                  {canViewRevenue && (
+                                    <td className="px-4 py-3 font-semibold">{etb(o.total)}</td>
+                                  )}
                                   <td className="px-4 py-3">
                                     <StatusBadge s={o.status} />
                                   </td>
                                   <td className="px-4 py-3 text-xs text-muted-foreground">
                                     {o.created_at}
+                                  </td>
+                                </tr>
+                              ),
+                            )
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Related Quotes */}
+                    <h4 className="font-semibold mt-5 mb-3">Related Quotes</h4>
+                    <div className="overflow-hidden rounded-xl border border-border">
+                      <table className="w-full text-sm text-left">
+                        <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
+                          <tr>
+                            <th className="px-4 py-3">#</th>
+                            <th className="px-4 py-3">Subject</th>
+                            {canViewRevenue && <th className="px-4 py-3">Amount</th>}
+                            <th className="px-4 py-3">Status</th>
+                            <th className="px-4 py-3">Date</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {((customerDetailQuery.data as any).recent_quotes ?? []).length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={canViewRevenue ? 5 : 4}
+                                className="py-6 text-center text-muted-foreground/60 text-sm"
+                              >
+                                No quote requests found.
+                              </td>
+                            </tr>
+                          ) : (
+                            ((customerDetailQuery.data as any).recent_quotes ?? []).map(
+                              (q: any) => (
+                                <tr key={q.quote_id}>
+                                  <td className="px-4 py-3 font-mono text-xs">#{q.quote_id}</td>
+                                  <td className="px-4 py-3">{q.subject}</td>
+                                  {canViewRevenue && (
+                                    <td className="px-4 py-3 font-semibold">
+                                      {q.quoted_amount ? etb(q.quoted_amount) : "—"}
+                                    </td>
+                                  )}
+                                  <td className="px-4 py-3">
+                                    <StatusBadge s={q.status} />
+                                  </td>
+                                  <td className="px-4 py-3 text-xs text-muted-foreground">
+                                    {q.created_at}
+                                  </td>
+                                </tr>
+                              ),
+                            )
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Related Messages */}
+                    <h4 className="font-semibold mt-5 mb-3">Related Inquiries & Messages</h4>
+                    <div className="overflow-hidden rounded-xl border border-border">
+                      <table className="w-full text-sm text-left">
+                        <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
+                          <tr>
+                            <th className="px-4 py-3">#</th>
+                            <th className="px-4 py-3">Subject</th>
+                            <th className="px-4 py-3">Status</th>
+                            <th className="px-4 py-3">Date</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {((customerDetailQuery.data as any).recent_messages ?? []).length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={4}
+                                className="py-6 text-center text-muted-foreground/60 text-sm"
+                              >
+                                No contact messages found.
+                              </td>
+                            </tr>
+                          ) : (
+                            ((customerDetailQuery.data as any).recent_messages ?? []).map(
+                              (m: any) => (
+                                <tr key={m.id}>
+                                  <td className="px-4 py-3 font-mono text-xs">#{m.id}</td>
+                                  <td className="px-4 py-3">{m.subject}</td>
+                                  <td className="px-4 py-3">
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                        m.is_read
+                                          ? "bg-muted text-muted-foreground"
+                                          : "bg-primary/15 text-primary"
+                                      }`}
+                                    >
+                                      {m.is_read ? "Read" : "Unread"}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-xs text-muted-foreground">
+                                    {m.created_at}
                                   </td>
                                 </tr>
                               ),
@@ -2920,17 +3498,87 @@ export function AdminDashboard() {
                     {selectedMessage.message}
                   </div>
 
+                  {/* ---- Conversation Thread / Reply History ---- */}
+                  {contactMessageRepliesQuery.data &&
+                    (contactMessageRepliesQuery.data as any[]).length > 0 && (
+                      <div className="space-y-3 pt-2">
+                        <Label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+                          <History className="h-3.5 w-3.5" />
+                          Conversation History ({(contactMessageRepliesQuery.data as any[]).length})
+                        </Label>
+                        <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                          {(contactMessageRepliesQuery.data as any[]).map((reply: any) => (
+                            <div
+                              key={reply.id}
+                              className={`rounded-lg p-3 text-sm border ${
+                                reply.is_internal
+                                  ? "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800"
+                                  : "bg-sky-50 dark:bg-sky-950/30 border-sky-200 dark:border-sky-800"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="font-semibold text-xs text-foreground flex items-center gap-1.5">
+                                  {reply.staff_name}
+                                  {reply.is_internal ? (
+                                    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-400">
+                                      <Lock className="h-2.5 w-2.5" />
+                                      Internal
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-sky-100 dark:bg-sky-900/50 text-sky-700 dark:text-sky-400">
+                                      <Eye className="h-2.5 w-2.5" />
+                                      Sent
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">
+                                  {reply.created_at}
+                                </span>
+                              </div>
+                              <p className="text-foreground/80 whitespace-pre-wrap text-xs leading-relaxed">
+                                {reply.reply_text}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                  {/* ---- Reply Form ---- */}
                   <div className="space-y-3 pt-2">
                     <Label className="text-xs font-semibold text-muted-foreground">
-                      Quick Reply
+                      {messageReplyInternal ? "Internal Note" : "Quick Reply"}
                     </Label>
                     <textarea
                       rows={4}
                       value={replyText}
                       onChange={(e) => setReplyText(e.target.value)}
-                      placeholder="Type your response to the customer..."
-                      className="w-full rounded-xl border border-border p-3 text-sm focus:outline-sky-500"
+                      placeholder={
+                        messageReplyInternal
+                          ? "Write an internal note (not visible to the customer)..."
+                          : "Type your response to the customer..."
+                      }
+                      className={`w-full rounded-xl border p-3 text-sm focus:outline-sky-500 ${
+                        messageReplyInternal
+                          ? "border-amber-300 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-700"
+                          : "border-border"
+                      }`}
                     />
+
+                    {/* Internal note toggle */}
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={messageReplyInternal}
+                        onChange={(e) => setMessageReplyInternal(e.target.checked)}
+                        className="rounded border-border accent-amber-500"
+                      />
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Lock className="h-3 w-3" />
+                        Internal Note (confidential, not sent to customer)
+                      </span>
+                    </label>
+
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <Button
@@ -2981,7 +3629,11 @@ export function AdminDashboard() {
                         size="sm"
                         onClick={async () => {
                           if (!replyText.trim()) {
-                            toast.error("Please enter a reply message.");
+                            toast.error(
+                              messageReplyInternal
+                                ? "Please enter a note."
+                                : "Please enter a reply message.",
+                            );
                             return;
                           }
                           const msg = replyText.trim();
@@ -2992,20 +3644,40 @@ export function AdminDashboard() {
                                 message_id: selectedMessage.id,
                                 email: selectedMessage.email,
                                 message: msg,
+                                is_internal: messageReplyInternal,
                               },
                             } as any);
-                            toast.success(`Reply sent to ${selectedMessage.email}`);
+                            toast.success(
+                              messageReplyInternal
+                                ? "Internal note saved"
+                                : `Reply sent to ${selectedMessage.email}`,
+                            );
+                            setMessageReplyInternal(false);
                             contactMessagesQuery.refetch();
+                            contactMessageRepliesQuery.refetch();
                           } catch (err) {
                             toast.error(
                               err instanceof Error ? err.message : "Failed to send reply",
                             );
                           }
                         }}
-                        className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
+                        className={
+                          messageReplyInternal
+                            ? "bg-amber-600 hover:bg-amber-700 text-white gap-2"
+                            : "bg-primary hover:bg-primary/90 text-primary-foreground gap-2"
+                        }
                       >
-                        <Send className="h-4 w-4" />
-                        Send Reply
+                        {messageReplyInternal ? (
+                          <>
+                            <Lock className="h-4 w-4" />
+                            Save Internal Note
+                          </>
+                        ) : (
+                          <>
+                            <Send className="h-4 w-4" />
+                            Send Reply &amp; Email Customer
+                          </>
+                        )}
                       </Button>
                     </div>
                   </div>
@@ -3276,17 +3948,19 @@ export function AdminDashboard() {
         (!hasPermission("reports.view") ? (
           <NotAuthorized
             userRole={user?.role}
-            message="Financial performance and sales analytics reports are restricted to administrators."
+            message="Reports are restricted to authorized users."
           />
         ) : (
           <div className="space-y-6 animate-in fade-in-50 duration-200">
             <div className="flex justify-between items-center flex-wrap gap-4">
               <div>
                 <h1 className="text-2xl font-bold tracking-tight text-foreground">
-                  Analytics & Sales Reports
+                  {canViewRevenue ? "Analytics & Sales Reports" : "Operational Reports"}
                 </h1>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Date-range reports on delivered revenue, top products, and more
+                  {canViewRevenue
+                    ? "Date-range reports on delivered revenue, top products, and more"
+                    : "Date-range reports on order volume, fulfillment, and product sales counts"}
                 </p>
               </div>
               <div className="flex gap-2 items-center flex-wrap">
@@ -3334,7 +4008,7 @@ export function AdminDashboard() {
                     if (!w) return;
                     const html = document.querySelector(".space-y-8")?.outerHTML || "";
                     w.document.write(
-                      `<!DOCTYPE html><html><head><title>Report ${reportStart} to ${reportEnd}</title><style>body{font-family:sans-serif;padding:32px;max-width:1000px;margin:auto}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #e5e7eb;padding:8px;text-align:left}th{background:#f3f4f6}h1{color:#0ea5e9}.kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}.kpi>div{border:1px solid #e5e7eb;padding:16px;border-radius:8px}@media print{button{display:none!important}.no-print{display:none!important}}</style></head><body><h1>Analytics Report</h1><p>Date Range: ${reportStart} to ${reportEnd}</p>${html}<script>window.print();<\/script></body></html>`,
+                      `<!DOCTYPE html><html><head><title>Report ${reportStart} to ${reportEnd}</title><style>body{font-family:sans-serif;padding:32px;max-width:1000px;margin:auto}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #e5e7eb;padding:8px;text-align:left}th{background:#f3f4f6}h1{color:#0ea5e9}.kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}.kpi>div{border:1px solid #e5e7eb;padding:16px;border-radius:8px}@media print{button{display:none!important}.no-print{display:none!important}}</style></head><body><h1>${canViewRevenue ? "Analytics Report" : "Operational Report"}</h1><p>Date Range: ${reportStart} to ${reportEnd}</p>${html}<script>window.print();<\/script></body></html>`,
                     );
                     w.document.close();
                   }}
@@ -3366,63 +4040,92 @@ export function AdminDashboard() {
                       {reportData.summary?.delivered_orders ?? 0}
                     </p>
                   </div>
-                  <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
-                    <p className="text-xs font-semibold text-muted-foreground">Total Revenue</p>
-                    <p className="text-2xl font-bold text-foreground mt-1.5">
-                      {etb(reportData.summary?.total_revenue ?? 0)}
-                    </p>
-                  </div>
-                  <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
-                    <p className="text-xs font-semibold text-muted-foreground">Delivered Revenue</p>
-                    <p className="text-2xl font-bold text-emerald-600 mt-1.5">
-                      {etb(reportData.summary?.delivered_revenue ?? 0)}
-                    </p>
-                  </div>
+                  {canViewRevenue ? (
+                    <>
+                      <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
+                        <p className="text-xs font-semibold text-muted-foreground">Total Revenue</p>
+                        <p className="text-2xl font-bold text-foreground mt-1.5">
+                          {etb(reportData.summary?.total_revenue ?? 0)}
+                        </p>
+                      </div>
+                      <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
+                        <p className="text-xs font-semibold text-muted-foreground">Delivered Revenue</p>
+                        <p className="text-2xl font-bold text-emerald-600 mt-1.5">
+                          {etb(reportData.summary?.delivered_revenue ?? 0)}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
+                        <p className="text-xs font-semibold text-muted-foreground">Pending Orders</p>
+                        <p className="text-3xl font-bold text-foreground mt-1.5">
+                          {pendingOrderCount}
+                        </p>
+                      </div>
+                      <div className="bg-card border border-border rounded-2xl p-5 shadow-xs">
+                        <p className="text-xs font-semibold text-muted-foreground">Low Stock Items</p>
+                        <p className="text-3xl font-bold text-amber-600 mt-1.5">
+                          {lowStockCount}
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className="bg-white rounded-xl border p-4">
-                  <div className="flex justify-between items-center mb-3">
-                    <h3 className="font-semibold">Daily Revenue (Delivered)</h3>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        fetchExportReportCSV({
-                          data: { type: "sales", startDate: reportStart, endDate: reportEnd },
-                        } as any).then((r: any) => {
-                          downloadCsv(r.csv, r.filename ?? "report.csv");
-                        })
-                      }
-                    >
-                      <Download className="w-3 h-3 mr-1" />
-                      CSV
-                    </Button>
+
+                {/* Daily Revenue Chart — Admin Only */}
+                {canViewRevenue && (
+                  <div className="bg-white rounded-xl border p-4">
+                    <div className="flex justify-between items-center mb-3">
+                      <h3 className="font-semibold">Daily Revenue (Delivered)</h3>
+                      <Can permission="reports.export">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            fetchExportReportCSV({
+                              data: { type: "sales", startDate: reportStart, endDate: reportEnd },
+                            } as any).then((r: any) => {
+                              downloadCsv(r.csv, r.filename ?? "report.csv");
+                            })
+                          }
+                        >
+                          <Download className="w-3 h-3 mr-1" />
+                          CSV
+                        </Button>
+                      </Can>
+                    </div>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <LineChart data={reportData.daily ?? []}>
+                        <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} />
+                        <Tooltip formatter={(v: any) => etb(Number(v))} />
+                        <Line type="monotone" dataKey="revenue" stroke="#0ea5e9" dot={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
                   </div>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <LineChart data={reportData.daily ?? []}>
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip formatter={(v: any) => etb(Number(v))} />
-                      <Line type="monotone" dataKey="revenue" stroke="#0ea5e9" dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
+                )}
+
+                {/* Top 10 Products Table */}
                 <div className="bg-white rounded-xl border p-4">
                   <div className="flex justify-between items-center mb-3">
                     <h3 className="font-semibold">Top 10 Products</h3>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        fetchExportReportCSV({
-                          data: { type: "products", startDate: reportStart, endDate: reportEnd },
-                        } as any).then((r: any) => {
-                          downloadCsv(r.csv, r.filename ?? "products.csv");
-                        })
-                      }
-                    >
-                      <Download className="w-3 h-3 mr-1" />
-                      CSV
-                    </Button>
+                    <Can permission="reports.export">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          fetchExportReportCSV({
+                            data: { type: "products", startDate: reportStart, endDate: reportEnd },
+                          } as any).then((r: any) => {
+                            downloadCsv(r.csv, r.filename ?? "products.csv");
+                          })
+                        }
+                      >
+                        <Download className="w-3 h-3 mr-1" />
+                        CSV
+                      </Button>
+                    </Can>
                   </div>
                   <div className="overflow-hidden rounded-xl border border-border">
                     <table className="w-full text-sm text-left">
@@ -3430,14 +4133,14 @@ export function AdminDashboard() {
                         <tr>
                           <th className="px-4 py-3">Product</th>
                           <th className="px-4 py-3">Qty Sold</th>
-                          <th className="px-4 py-3">Revenue</th>
+                          {canViewRevenue && <th className="px-4 py-3">Revenue</th>}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
                         {(reportData.top_products ?? []).length === 0 ? (
                           <tr>
                             <td
-                              colSpan={3}
+                              colSpan={canViewRevenue ? 3 : 2}
                               className="py-6 text-center text-muted-foreground/60 text-sm"
                             >
                               No delivered orders in this period.
@@ -3448,7 +4151,9 @@ export function AdminDashboard() {
                             <tr key={i}>
                               <td className="px-4 py-3">{p.product_name}</td>
                               <td className="px-4 py-3">{p.qty}</td>
-                              <td className="px-4 py-3 font-semibold">{etb(p.revenue)}</td>
+                              {canViewRevenue && (
+                                <td className="px-4 py-3 font-semibold">{etb(p.revenue)}</td>
+                              )}
                             </tr>
                           ))
                         )}
@@ -3456,7 +4161,9 @@ export function AdminDashboard() {
                     </table>
                   </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+                {/* Charts Grid */}
+                <div className={`grid grid-cols-1 ${canViewRevenue ? "md:grid-cols-2" : ""} gap-6`}>
                   <div className="bg-white rounded-xl border p-4">
                     <h3 className="font-semibold mb-3">Orders by Status</h3>
                     <ResponsiveContainer width="100%" height={200}>
@@ -3478,18 +4185,22 @@ export function AdminDashboard() {
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
-                  <div className="bg-white rounded-xl border p-4">
-                    <h3 className="font-semibold mb-3">Revenue by Category</h3>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <BarChart data={reportData.by_category ?? []}>
-                        <XAxis dataKey="category" tick={{ fontSize: 11 }} />
-                        <YAxis tick={{ fontSize: 11 }} />
-                        <Tooltip formatter={(v: any) => etb(Number(v))} />
-                        <Bar dataKey="revenue" fill="#6366f1" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                  {canViewRevenue && (
+                    <div className="bg-white rounded-xl border p-4">
+                      <h3 className="font-semibold mb-3">Revenue by Category</h3>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <BarChart data={reportData.by_category ?? []}>
+                          <XAxis dataKey="category" tick={{ fontSize: 11 }} />
+                          <YAxis tick={{ fontSize: 11 }} />
+                          <Tooltip formatter={(v: any) => etb(Number(v))} />
+                          <Bar dataKey="revenue" fill="#6366f1" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
                 </div>
+
+                {/* Quote Conversion Metrics */}
                 <div className="bg-white rounded-xl border p-4">
                   <h3 className="font-semibold mb-3">Quote Conversion</h3>
                   <div className="flex gap-8">
@@ -3522,23 +4233,27 @@ export function AdminDashboard() {
                     </div>
                   </div>
                 </div>
+
+                {/* Low Stock Items Table */}
                 <div className="bg-white rounded-xl border p-4">
                   <div className="flex justify-between items-center mb-3">
                     <h3 className="font-semibold">Low Stock Items</h3>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        fetchExportReportCSV({
-                          data: { type: "low_stock", startDate: reportStart, endDate: reportEnd },
-                        } as any).then((r: any) => {
-                          downloadCsv(r.csv, r.filename ?? "low_stock.csv");
-                        })
-                      }
-                    >
-                      <Download className="w-3 h-3 mr-1" />
-                      CSV
-                    </Button>
+                    <Can permission="reports.export">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          fetchExportReportCSV({
+                            data: { type: "low_stock", startDate: reportStart, endDate: reportEnd },
+                          } as any).then((r: any) => {
+                            downloadCsv(r.csv, r.filename ?? "low_stock.csv");
+                          })
+                        }
+                      >
+                        <Download className="w-3 h-3 mr-1" />
+                        CSV
+                      </Button>
+                    </Can>
                   </div>
                   <div className="overflow-hidden rounded-xl border border-border">
                     <table className="w-full text-sm text-left">
@@ -3549,7 +4264,7 @@ export function AdminDashboard() {
                           <th className="px-4 py-3">Category</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-border">
+                      <tbody className="divide-y border-border">
                         {(reportData.low_stock ?? []).length === 0 ? (
                           <tr>
                             <td
@@ -4055,7 +4770,23 @@ export function AdminDashboard() {
                       </select>
                     </div>
                     <div className="sm:col-span-2 space-y-1.5">
-                      <Label className="text-xs font-semibold">Temporary Password *</Label>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs font-semibold">Temporary Password *</Label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+                            let pwd = "";
+                            for (let i = 0; i < 10; i++) {
+                              pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+                            }
+                            setNewTeamMember({ ...newTeamMember, temporaryPassword: pwd });
+                          }}
+                          className="text-xs text-primary hover:underline font-medium cursor-pointer"
+                        >
+                          Generate Secure Password
+                        </button>
+                      </div>
                       <Input
                         type="text"
                         placeholder="Temporary password (min 6 characters)"
@@ -4064,6 +4795,12 @@ export function AdminDashboard() {
                           setNewTeamMember({ ...newTeamMember, temporaryPassword: e.target.value })
                         }
                       />
+                      {newTeamMember.temporaryPassword.length > 0 &&
+                        newTeamMember.temporaryPassword.length < 6 && (
+                          <p className="text-xs text-rose-500">
+                            Password must be at least 6 characters.
+                          </p>
+                        )}
                     </div>
                   </div>
 
@@ -4097,9 +4834,15 @@ export function AdminDashboard() {
                           });
                           customersQuery.refetch();
                         } catch (err) {
-                          toast.error(
-                            err instanceof Error ? err.message : "Failed to create team member",
-                          );
+                          let rawMsg =
+                            err instanceof Error ? err.message : "Failed to create team member";
+                          try {
+                            const parsed = JSON.parse(rawMsg);
+                            if (Array.isArray(parsed) && parsed[0]?.message) {
+                              rawMsg = parsed.map((p) => p.message).join(", ");
+                            }
+                          } catch {}
+                          toast.error(rawMsg);
                         } finally {
                           setCreatingMember(false);
                         }

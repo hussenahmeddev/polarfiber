@@ -55,8 +55,9 @@ export function ProductDialog({
   onSave,
   loading = false,
 }: ProductDialogProps) {
+  const isEditing = (product?.product_id ?? 0) > 0;
   const { hasPermission, role } = usePermissions();
-  const canUpdatePrice = role === "admin" || hasPermission("products.update_price");
+  const canUpdatePrice = role === "admin" || hasPermission("products.update_price") || !isEditing;
   const canEditSku = role === "admin";
   const fetchProductImages = useServerFn(getProductImages);
   const mutateUploadProductImage = useServerFn(uploadProductImage);
@@ -201,8 +202,6 @@ export function ProductDialog({
       e.target.value = "";
     }
   };
-
-  const isEditing = (product?.product_id ?? 0) > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

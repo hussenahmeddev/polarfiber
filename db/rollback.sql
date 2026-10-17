@@ -6,6 +6,14 @@
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
+-- 15. conversation_tokens, quote_replies, email_failures  – drop tables (additive)
+-- -----------------------------------------------------------------------------
+  DROP TABLE IF EXISTS email_failures;
+  DROP TABLE IF EXISTS quote_replies;
+  DROP TABLE IF EXISTS contact_message_replies;
+  DROP TABLE IF EXISTS conversation_tokens;
+
+-- -----------------------------------------------------------------------------
 -- 14. customer_conversations & customer_messages  – drop tables (additive, safe to drop)
 -- -----------------------------------------------------------------------------
 DROP TABLE IF EXISTS customer_messages;

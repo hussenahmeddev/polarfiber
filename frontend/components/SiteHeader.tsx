@@ -11,6 +11,7 @@ const nav = [
   { to: "/products", label: "Our Product" },
   { to: "/faq", label: "FAQ" },
   { to: "/contact", label: "Contact" },
+  { to: "/order-tracking", label: "Track Order" },
 ] as const;
 
 export function SiteHeader() {
@@ -86,6 +87,7 @@ export function SiteHeader() {
           { to: "/products", label: "Our Product" },
           { to: "/faq", label: "FAQ" },
           { to: "/contact", label: "Contact" },
+          { to: "/order-tracking", label: "Track Order" },
         ].map((n) => (
           <Link
             key={n.to}

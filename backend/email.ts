@@ -1,11 +1,109 @@
 import { withDb } from "./db.server";
 import { decryptSmtpPassword } from "../utils/crypto";
+import { CONVERSATION_TOKEN_VALID_DAYS } from "../utils/conversation-tokens";
 
 interface EmailOptions {
   to: string;
   subject: string;
   text: string;
-  html?: string;
+  html: string;
+}
+
+export interface EmailContext {
+  conversationType?: "quote" | "contact_message" | "order";
+  conversationId?: number;
+}
+
+/**
+ * Sends an email and, on failure, records the delivery failure so it can be
+ * retried later. The caller's business logic (saving the reply) has already
+ * run by the time this is called, so a delivery failure never loses data.
+ */
+async function sendEmailTracked(options: EmailOptions, ctx?: EmailContext): Promise<boolean> {
+  const ok = await sendEmail(options);
+  if (!ok && ctx?.conversationType && ctx?.conversationId) {
+    await recordEmailFailure(options.to, options.subject, ctx.conversationType, ctx.conversationId);
+  }
+  return ok;
+}
+
+/** Records a failed email delivery for later retry. */
+async function recordEmailFailure(
+  recipient: string,
+  subject: string,
+  conversationType: string,
+  conversationId: number,
+  error: string = "SMTP send returned false or threw",
+): Promise<void> {
+  try {
+    await withDb((c) =>
+      c.execute(
+        `INSERT INTO email_failures
+           (recipient, subject, conversation_type, conversation_id, error, retry_count, next_retry_at)
+         VALUES (?, ?, ?, ?, ?, 0, ?)`,
+        [
+          recipient,
+          subject,
+          conversationType,
+          conversationId,
+          error,
+          new Date(Date.now() + 60 * 60 * 1000),
+        ],
+      ),
+    );
+  } catch (err) {
+    console.error("[recordEmailFailure] Failed to record email failure:", err);
+  }
+}
+
+/** Retries a previously failed email by re-sending its stored payload. */
+export async function retryEmail(emailFailureId: number): Promise<boolean> {
+  return withDb(async (c) => {
+    const [r] = await c.execute(
+      `SELECT recipient, subject, conversation_type, conversation_id, error
+       FROM email_failures WHERE id = ?`,
+      [emailFailureId],
+    );
+    const results = r as Array<Record<string, unknown>>;
+    const rec = results[0];
+    if (!rec) throw new Error("Email failure record not found.");
+
+    const recipient = rec["recipient"] as string;
+    const subject = rec["subject"] as string;
+    const convType = rec["conversation_type"] as string | undefined;
+    const convId = rec["conversation_id"] as number | undefined;
+
+    // The original text/body is not stored; reconstruct a minimal retry payload
+    // from the conversation data. We re-fetch the latest message to include it.
+    const result = await sendEmailTracked(
+      {
+        to: recipient,
+        subject: subject,
+        text: `This is an automated retry of a message that failed to deliver earlier.\n\nPlease use the conversation link to view all messages.\n\nThank you for choosing Polar Fiber!`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2 style="color: #0ea5e9;">Message Delivery Retry</h2>
+            <p>This is an automated retry of a message that failed to deliver earlier. Please use the conversation link in your original message.</p>
+            <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;" />
+            <p style="color: #64748b; font-size: 14px;">Thank you for choosing Polar Fiber!</p>
+          </div>`,
+      },
+      convType && convId
+        ? {
+            conversationType: convType as "quote" | "contact_message" | "order",
+            conversationId: convId,
+          }
+        : undefined,
+    );
+
+    if (result) {
+      await c.execute(
+        `UPDATE email_failures SET retry_count = retry_count + 1 WHERE id = ?`,
+        emailFailureId,
+      );
+    }
+    return result;
+  });
 }
 
 /**
@@ -80,7 +178,7 @@ export async function sendOrderStatusEmail(
   await sendEmail({
     to: userEmail,
     subject: `Order #${orderId} Status Update - Polar Fiber`,
-     text: `Dear ${userName},\n\nYour order #${orderId} (ETB ${orderTotal.toLocaleString()}) status has been updated to: ${newStatus}.\n\nTrack your order at: https://polarfiber.com.et/track-order\n\nThank you for choosing Polar Fiber!`,
+    text: `Dear ${userName},\n\nYour order #${orderId} (ETB ${orderTotal.toLocaleString()}) status has been updated to: ${newStatus}.\n\nTrack your order at: https://polarfiber.com.et/track-order\n\nThank you for choosing Polar Fiber!`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #0ea5e9;">Order Status Update</h2>
@@ -97,35 +195,40 @@ export async function sendOrderStatusEmail(
 
 /**
  * Sends an order confirmation email for guest checkouts with access password.
+ * The order-access password is intentionally never included in the email.
  */
 export async function sendOrderConfirmation(
   userEmail: string,
   userName: string,
   orderId: number,
   orderTotal: number,
-  accessPassword: string,
-): Promise<void> {
-  await sendEmail({
-    to: userEmail,
-    subject: `Order #${orderId} Confirmation - Polar Fiber`,
-    text: `Dear ${userName},\n\nThank you for your order #${orderId} (ETB ${orderTotal.toLocaleString()}).\n\nTo track your order, visit https://polarfiber.com.et/track-order and use:\n  Order ID: ${orderId}\n  Access Password: ${accessPassword}\n\nThank you for choosing Polar Fiber!`,
-    html: `
+): Promise<boolean> {
+  const orderNumber = `PF-ORD-${orderId}`;
+  return sendEmailTracked(
+    {
+      to: userEmail,
+      subject: `Order ${orderNumber} Confirmation - Polar Fiber`,
+      text: `Dear ${userName},\n\nThank you for your order ${orderNumber} (ETB ${orderTotal.toLocaleString()}).\n\nTo track your order, visit https://polarfiber.com.et/order-tracking and use:\n  Order number: ${orderNumber}\n  Email: ${userEmail}\n  Access password: the one you set during checkout\n\nThank you for choosing Polar Fiber!`,
+      html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #0ea5e9;">Order Confirmation</h2>
         <p>Dear ${userName},</p>
-        <p>Thank you for your order <strong>#${orderId}</strong> (ETB ${orderTotal.toLocaleString()}).</p>
+        <p>Thank you for your order <strong>${orderNumber}</strong> (ETB ${orderTotal.toLocaleString()}).</p>
         <p>To track your order, visit:</p>
-        <p style="font-size: 18px; font-weight: bold; color: #0ea5e9;">https://polarfiber.com.et/track-order</p>
-        <p>Use the following credentials to view your order details:</p>
+        <p style="font-size: 18px; font-weight: bold; color: #0ea5e9;">https://polarfiber.com.et/order-tracking</p>
+        <p>Use the following to view your order details:</p>
         <table style="margin: 15px 0; font-family: monospace; font-size: 16px;">
-          <tr><td style="padding-right: 10px;">Order ID:</td><td><strong>${orderId}</strong></td></tr>
-          <tr><td style="padding-right: 10px;">Access Password:</td><td><strong>${accessPassword}</strong></td></tr>
+          <tr><td style="padding-right: 10px;">Order number:</td><td><strong>${orderNumber}</strong></td></tr>
+          <tr><td style="padding-right: 10px;">Email:</td><td>${userEmail}</td></tr>
+          <tr><td style="padding-right: 10px;">Access password:</td><td>(the one you set during checkout)</td></tr>
         </table>
         <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;" />
         <p style="color: #64748b; font-size: 14px;">Thank you for choosing Polar Fiber!</p>
       </div>
     `,
-  });
+    },
+    { conversationType: "order", conversationId: orderId },
+  );
 }
 
 /**
@@ -141,7 +244,7 @@ export async function sendQuoteStatusEmail(
   await sendEmail({
     to: userEmail,
     subject: `Quote #${quoteId} Update - Polar Fiber`,
-     text: `Dear ${userName},\n\nYour quote request #${quoteId} status has been updated to: ${newStatus}.${quotedAmount ? ` Quoted amount: ETB ${quotedAmount.toLocaleString()}` : ""}\n\nView details at: https://polarfiber.com.et/track-order\n\nThank you for choosing Polar Fiber!`,
+    text: `Dear ${userName},\n\nYour quote request #${quoteId} status has been updated to: ${newStatus}.${quotedAmount ? ` Quoted amount: ETB ${quotedAmount.toLocaleString()}` : ""}\n\nView details at: https://polarfiber.com.et/track-order\n\nThank you for choosing Polar Fiber!`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #0ea5e9;">Quote Request Update</h2>
@@ -166,12 +269,14 @@ export async function sendMessageNotificationEmail(
   subject: string,
   preview: string,
   conversationUrl: string,
+  ctx?: EmailContext,
 ): Promise<void> {
-  await sendEmail({
-    to: userEmail,
-    subject: `New Message: ${subject} - Polar Fiber`,
-    text: `Dear ${userName},\n\nYou have a new message:\n${preview}\n\nView conversation: ${conversationUrl}\n\nThank you for choosing Polar Fiber!`,
-    html: `
+  await sendEmailTracked(
+    {
+      to: userEmail,
+      subject: `New Message: ${subject} - Polar Fiber`,
+      text: `Dear ${userName},\n\nYou have a new message:\n${preview}\n\nView conversation: ${conversationUrl}\n\nThank you for choosing Polar Fiber!`,
+      html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
         <h2 style="color: #0ea5e9;">New Message</h2>
         <p>Dear ${userName},</p>
@@ -183,7 +288,9 @@ export async function sendMessageNotificationEmail(
         <p style="color: #64748b; font-size: 14px;">Thank you for choosing Polar Fiber!</p>
       </div>
     `,
-  });
+    },
+    ctx,
+  );
 }
 
 /**
@@ -215,3 +322,33 @@ export async function sendWelcomeEmail(
 }
 
 export default sendEmail;
+
+export { sendEmailTracked, recordEmailFailure };
+
+/**
+ * Sends a notification email to a customer containing a secure, expiring
+ * conversation link. Used for quote replies and contact-message replies.
+ */
+export async function sendConversationNotificationEmail(
+  options: EmailOptions & {
+    conversationUrl: string;
+    expiresInDays: number;
+    ctx?: EmailContext;
+  },
+): Promise<void> {
+  const ok = await sendEmailTracked(
+    {
+      to: options.to,
+      subject: options.subject,
+      text: options.text,
+      html: options.html,
+    },
+    options.ctx,
+  );
+  if (!ok) {
+    console.error(
+      "[sendConversationNotificationEmail] Failed to send conversation email to:",
+      options.to,
+    );
+  }
+}

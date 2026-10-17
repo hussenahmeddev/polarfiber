@@ -69,6 +69,7 @@ export const QUOTE_STATUSES = [
   "Reviewing",
   "Pending Approval",
   "Replied",
+  "Accepted",
   "Closed",
 ] as const;
 export type QuoteStatus = (typeof QUOTE_STATUSES)[number];
@@ -146,8 +147,12 @@ export type CustomerDashboardData = {
 export type AdminOverviewKPIs = {
   totalRevenue: number;
   totalOrders: number;
+  pendingOrders: number;
+  completedOrders: number;
   newQuotes: number;
   lowStockCount: number;
+  customers: number;
+  unreadMessages: number;
 };
 
 export type TimelinePoint = {

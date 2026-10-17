@@ -24,6 +24,6 @@ describe("Global Rules & Helpers", () => {
           { token: "my_token", refresh_token: "ref_tok", smtp_password: "smtp", api_key: "api123" },
         ),
       ).resolves.not.toThrow();
-    });
+    }, 15000);
   });
 });

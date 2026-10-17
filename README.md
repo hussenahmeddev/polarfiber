@@ -1,6 +1,6 @@
-# Polar Fiber — E-Commerce & Management Platform
+# Polar Fiber — E-Commerce & Operations Management Platform
 
-A modern, full-stack web application and operations management system for **Polar Fiber** (Addis Ababa, Ethiopia) — manufacturers of rotomolded and blow-molded food-grade water tankers with a 10-year warranty, fiber pipes, flower pots, and roofing sheets.
+A modern, full-stack web application and operations management platform for **Polar Fiber** (Addis Ababa, Ethiopia) — manufacturers of rotomolded and blow-molded food-grade water tankers with a 10-year warranty, fiber pipes, flower pots, and roofing sheets.
 
 Built with **TanStack Start**, **React 19**, **Vite**, **Tailwind CSS v4**, and backed by **Aiven Cloud MySQL 8**.
 
@@ -12,6 +12,8 @@ Built with **TanStack Start**, **React 19**, **Vite**, **Tailwind CSS v4**, and 
 - [Key Features](#-key-features)
 - [Architecture & Tech Stack](#-architecture--tech-stack)
 - [Role-Based Access Control (RBAC)](#-role-based-access-control-rbac)
+- [Order Lifecycle State Machine](#-order-lifecycle-state-machine)
+- [Customer Conversation Portal](#-customer-conversation-portal)
 - [Project Structure](#-project-structure)
 - [Database & Schema](#-database--schema)
 - [Authentication & Security](#-authentication--security)
@@ -33,8 +35,20 @@ Polar Fiber delivers durable, food-grade water storage solutions engineered to e
 1. **A public storefront & brand portal** mirroring the design, product line, and aesthetic of the official brand.
 2. **An instant quotation engine** allowing potential customers to submit project specifications and inquiries directly from any page.
 3. **A complete e-commerce workflow** featuring client-side cart management and tamper-proof server-side order calculations in Ethiopian Birr (ETB).
-4. **Public order tracking (`/track-order`)** for customers to verify order progress, delivery details, and item statuses using their order reference and secure access credentials.
-5. **A protected administrative suite (`/admin`)** providing comprehensive management of products, categories, orders, dispatch workflows, customer inquiries, support tickets, inventory audits, and role-based operations.
+4. **Self-service order tracking (`/order-tracking`)** for customers to verify live progress, delivery details, and item statuses using their order reference code and security credentials.
+5. **Customer conversation links (`/conversation/$token`)** providing secure, expiring, direct-access inquiry and quote response portals for guest clients without requiring an account.
+6. **A complete Staff Console & Administrative Suite (`/admin`)** providing role-tailored management across 11 key operational modules:
+   - **Overview**: Live counters with working filter links; financial revenue cards masked for staff.
+   - **Products**: Multi-image uploads and catalog management; price and SKU are read-only for staff; product deletion is restricted to administrators.
+   - **Categories**: Category listing and product association; category mutations are admin-restricted.
+   - **Inventory**: Real-time stock levels, low-stock warnings, mandatory reason audit tracking on all adjustments, and negative stock prevention.
+   - **Orders**: Enforces sequential lifecycle progression (`Pending` ➔ `Confirmed` ➔ `In Production` ➔ `Out for Delivery` ➔ `Delivered`), internal confidential notes, and customer email alerts.
+   - **Quotes**: Quote inquiry viewer, custom response amounts, validity terms, and admin-only conversion to orders.
+   - **Customers**: Unified directory with related orders, quotes, and inquiry messages; financial totals masked for staff.
+   - **Messages**: Direct conversation threads, internal staff notes, customer lookup tokens, and linked order/quote references.
+   - **Support**: Multi-priority ticket management with staff assignment and private internal notes.
+   - **Reports**: Role-tailored reporting — staff receives operational metrics (counts, delivery rate, low stock); admin receives sales revenue, category breakdowns, and CSV export tools.
+   - **Settings**: Staff profile management and mandatory first-login password changes, with business details, team management, and SMTP configuration restricted to administrators.
 
 ---
 
@@ -47,19 +61,17 @@ Polar Fiber delivers durable, food-grade water storage solutions engineered to e
 - **Product Details (`/products/$id`)**: Deep-dive product specifications (capacity, food-grade LLDPE material info, UV stabilization, price, and descriptions).
 - **Persistent Shopping Cart (`/cart`)**: Local browser-persisted cart state with item quantity adjustments and instant ETB total calculations.
 - **Secure Checkout & Order Placement**: Orders are placed with delivery address validation; order pricing is strictly re-computed against the live database on the server to prevent client-side price tampering.
-- **Self-Service Order Tracking (`/track-order`)**: Customers track live order fulfillment stages (`Pending`, `Confirmed`, `In Production`, `Delivered`, `Cancelled`) with order reference code and security credentials.
-- **Customer Inquiries & Contact (`/contact`)**: Submit general messages, quotation requests, and direct customer queries with rate limiting and automated logging.
+- **Order Confirmation (`/order-confirmation`)**: Instant receipt with access pass for easy post-checkout tracking.
+- **Self-Service Order Tracking (`/order-tracking`)**: Customers track live order fulfillment stages with order reference code and security credentials.
+- **Customer Inquiry Portal (`/conversation/$token`)**: Cryptographically signed access links allowing guest customers to view staff responses and reply directly.
 
-### 🛡️ Administrative & Operations Suite (`/admin`)
+### 🛡️ Administrative & Staff Console (`/admin`)
 
 - **Role-Tailored Dashboards**: Granular capability model distinguishing full Administrators from Operational Staff.
-- **Product & Category Catalog**: Full CRUD over catalog items, category hierarchies, image galleries, and pricing controls (restricted to admin).
-- **Order Pipeline & Dispatch Tracking**: Real-time order progress from receipt, internal team notes, payment confirmation, dispatch recording, through delivery confirmation.
-- **Inventory & Stock Adjustments**: Monitor low stock, request stock adjustments, approve/reject adjustment requests with reason tracking, and inspect audit trails.
-- **Quote Inquiries & Conversions**: View inbound quote requests, communicate with potential buyers, and convert quotes directly into confirmed orders.
-- **Customer Messages & Support Tickets**: Manage contact messages (archive, reply, delete) and structured customer support tickets with priority levels and assignment workflows.
-- **Analytics & Reporting**: Sales revenue charts, daily breakdowns, top 10 products sold, and low-stock reports with instant CSV exports.
-- **System Settings & Team Management**: Configure business details, factory contact lines, user role assignments, password policies, and staff profiles.
+- **Financial Masking**: Staff members see operational volume metrics (order counts, fulfillment rates, low stock items) while sales revenue, grand totals, and customer financial lifetime values remain strictly hidden.
+- **Guided Order Progression**: Intuitive step-by-step buttons ("Confirm Order", "Start Production", "Dispatch", "Complete Delivery") that prevent invalid out-of-order state transitions.
+- **Audit & Compliance**: Mandatory reasons required for every inventory change; immutable system audit log for security-sensitive operations.
+- **Secure Team Management**: Temporary password generator with automated expiration and mandatory change-on-first-login enforcement.
 
 ---
 
@@ -82,22 +94,59 @@ Polar Fiber delivers durable, food-grade water storage solutions engineered to e
 
 ## 👥 Role-Based Access Control (RBAC)
 
-The platform implements a security model with distinct capabilities for **Administrators** and **Staff**:
+The platform implements a strict permission model with distinct capabilities for **Administrators** and **Staff**:
 
 | Capability / Section | Admin Role | Staff Role |
 | :--- | :---: | :---: |
-| **Financial Revenue & Sales Metrics** | Full Access | Hidden |
-| **Product Pricing Edits** | Allowed | Read-Only (Field Disabled) |
-| **Add / Delete Products** | Allowed | Hidden |
-| **Order Status Workflow & Dispatch** | Allowed | Allowed |
+| **Financial Revenue & Sales Totals** | Full Access | Hidden / Masked |
+| **Product Catalog Creation** | Allowed | Allowed (Price & SKU Read-Only) |
+| **Product Price & SKU Editing** | Allowed | Read-Only |
+| **Product Deletion** | Allowed | Hidden |
+| **Category Creation, Edits & Deletion** | Allowed | Hidden / View-Only |
+| **Order Status Workflow (Sequential)** | Allowed | Allowed |
 | **Order Deletion & Refunds** | Allowed | Hidden |
-| **Stock Movements & Request Adjustment**| Allowed | Allowed |
-| **Approve / Reject Stock Adjustments** | Allowed | Hidden |
-| **Archive Inquiries & Tickets** | Allowed | Allowed |
-| **Delete Messages / Tickets** | Allowed | Hidden |
-| **Company Business Settings** | Allowed | Hidden |
+| **Stock Adjustments (With Mandatory Reason)** | Allowed | Allowed |
+| **Unlimited / High Stock Overrides** | Allowed | Hidden |
+| **Quotes Inbox & Staff Responses** | Allowed | Allowed |
+| **Convert Quote to Order** | Allowed | Hidden (Admin Only) |
+| **Expire Overdue Quotes** | Allowed | Hidden (Admin Only) |
+| **Customer Directory & Linked Records** | Full Data | Total Spent Hidden |
+| **Customer Blocking & Data Export** | Allowed | Hidden |
+| **Message Threading & Internal Notes** | Allowed | Allowed |
+| **Support Ticket Queue & Assignment** | Allowed | Allowed |
+| **Reports: Operational Metrics** | Full Access | Allowed |
+| **Reports: Financial Analytics & CSV** | Full Access | Hidden |
+| **Company Business & SMTP Settings** | Allowed | Hidden |
 | **Team Management & Role Changes** | Allowed | Hidden |
-| **My Profile & Password Change** | Allowed | Allowed (Sole Settings Tab) |
+| **My Profile & Password Self-Service** | Allowed | Allowed |
+
+---
+
+## 🔄 Order Lifecycle State Machine
+
+Order state changes are strictly governed by [`shared/order-status.ts`](shared/order-status.ts) to guarantee business workflow integrity:
+
+```
+[ Pending ] ──► [ Confirmed ] ──► [ In Production ] ──► [ Out for Delivery ] ──► [ Delivered ]
+     │               │                   │
+     ▼               ▼                   ▼
+[ Cancelled ]   [ Cancelled ]       [ Cancelled ]
+```
+
+- **Stage Skipping Prohibited**: An order cannot jump directly from `Pending` to `In Production` or `Delivered`.
+- **Cancellation Protection**: Cancellation is permitted from `Pending`, `Confirmed`, or `In Production`. Once an order is `Out for Delivery` or `Delivered`, cancellation is forbidden.
+- **Stock Restoration**: Cancelling an order automatically restores inventory with row-level locks (`SELECT ... FOR UPDATE`).
+- **Delivery Safeguard**: Marking an order `Delivered` requires either verified payment or confirmed Cash on Delivery.
+
+---
+
+## 💬 Customer Conversation Portal
+
+Guest customers can securely view staff responses to their quotes and inquiries without account registration:
+
+- **Cryptographic Tokens**: Generates 64-hex-character expiring tokens stored in `conversation_tokens`.
+- **Private Staff Notes**: Internal staff notes (`is_internal = 1`) are strictly isolated and omitted from customer-facing endpoints.
+- **Multi-Channel Sync**: Customer responses automatically update the staff console in real time and send email alerts.
 
 ---
 
@@ -118,12 +167,12 @@ polarfiber/
 ├── frontend/                 # Client UI application (React 19)
 │   ├── components/           # Reusable UI components
 │   │   ├── ui/               # Base primitives (button, dialog, input, label, tabs, textarea, sonner)
-│   │   ├── AdminDashboard.tsx# Comprehensive admin operations suite
+│   │   ├── AdminDashboard.tsx# Comprehensive admin & staff operations suite
 │   │   ├── AdminSidebarLayout.tsx # Navigation sidebar with permissions-aware routing
 │   │   ├── Can.tsx           # Declarative RBAC permission gate component
-│   │   ├── OrderDrawer.tsx   # Detailed order view, notes, audit, and dispatch actions
+│   │   ├── OrderDrawer.tsx   # Detailed order view, notes, audit, and sequential dispatch actions
 │   │   ├── ProductCard.tsx   # Product display card with image and pricing
-│   │   ├── ProductDialog.tsx # Product creation and editing modal
+│   │   ├── ProductDialog.tsx # Product creation and editing modal (price/SKU locked for staff)
 │   │   ├── QuoteForm.tsx     # Homepage and dedicated quote submission form
 │   │   ├── SiteHeader.tsx    # Branded navigation header and footer
 │   │   └── StatusBadge.tsx   # Visual status badge for orders and quotes
@@ -134,23 +183,30 @@ polarfiber/
 │   │   ├── products.index.tsx# Product catalog with category filter & sorting
 │   │   ├── products.$id.tsx  # Product detail view
 │   │   ├── cart.tsx          # Shopping cart & order placement
+│   │   ├── order-confirmation.tsx # Post-checkout confirmation and access pass display
+│   │   ├── order-tracking.tsx# Enhanced live order tracking with status milestones
+│   │   ├── track-order.tsx   # Backward-compatible redirect to order-tracking
+│   │   ├── conversation.$token.tsx # Token-authenticated customer messaging portal
 │   │   ├── login.tsx         # Staff & Administrator portal sign-in
 │   │   ├── admin.tsx         # Operations dashboard route
-│   │   ├── track-order.tsx   # Public guest order tracking by ID and password
 │   │   ├── quote.tsx         # Standalone quote request page
-│   │   └── contact.tsx       # Contact information, phone lines, and factory location
+│   │   ├── contact.tsx       # Contact information, phone lines, and factory location
+│   │   ├── faq.tsx           # Frequently asked questions
+│   │   └── services.tsx      # Services, warranties, and custom manufacturing info
 │   ├── routeTree.gen.ts      # Auto-generated TanStack route tree
 │   ├── router.tsx            # Router factory initialization
 │   ├── store.tsx             # Global client context (cart localStorage, current session user)
-│   └── test/                 # Vitest test suites (routing, RBAC, orders, transitions)
+│   └── test/                 # Vitest test suites (16 test files, 101 tests)
 │
 ├── shared/                   # Code shared across client and server
-│   ├── data.ts               # TypeScript interfaces, constants (CATEGORIES, STATUSES), and ETB helper
+│   ├── data.ts               # TypeScript interfaces, constants, and ETB helper
+│   ├── permissions.ts        # RBAC definitions (STAFF_PERMISSIONS, FORBIDDEN_STAFF_PERMISSIONS)
 │   ├── order-access.ts       # Secure password hashing and verification for guest tracking
 │   └── order-status.ts       # State transition rules and validation for orders
 │
 ├── utils/                    # Helper utilities
 │   ├── audit.ts              # System audit log recorders
+│   ├── conversation-tokens.ts# Cryptographic token generator and validator
 │   ├── notify.ts             # Email and operational notifications
 │   ├── rate-limit.ts         # In-memory request rate limiting
 │   ├── sanitize.ts           # Input sanitization and XSS prevention
@@ -158,7 +214,8 @@ polarfiber/
 │
 ├── db/                       # Database migrations and scripts
 │   ├── schema.sql            # Full MySQL DDL schema
-│   ├── migrate.sql           # Schema migration updates
+│   ├── migrate.sql           # Incremental schema migration updates
+│   ├── rollback.sql          # Safe rollback script
 │   ├── migrate.mjs           # Automated migration runner
 │   └── setup.mjs             # Database table creation and seeder script
 │
@@ -167,9 +224,9 @@ polarfiber/
 │   └── favicon.ico           # Application favicon
 │
 ├── .env                      # Local environment configuration (git-ignored)
-├── aiven-ca.pem              # Aiven SSL Certificate Authority file
 ├── package.json              # Dependencies and execution scripts
 ├── vite.config.ts            # Vite build configuration with TanStack Start plugin
+├── vitest.config.ts          # Vitest testing configuration
 └── tsconfig.json             # TypeScript compiler settings
 ```
 
@@ -179,140 +236,20 @@ polarfiber/
 
 The system uses an **Aiven Cloud MySQL 8** instance with a normalized relational schema:
 
-```mermaid
-erDiagram
-    CATEGORIES ||--o{ PRODUCTS : categorizes
-    USERS ||--o{ USER_ROLES : has
-    USERS ||--o{ AUDIT_LOGS : performs
-    ORDERS ||--|{ ORDER_ITEMS : contains
-    PRODUCTS ||--o{ ORDER_ITEMS : includes
-    PRODUCTS ||--o{ STOCK_ADJUSTMENTS : tracks
-    ORDERS ||--o{ ORDER_NOTES : records
-    SUPPORT_TICKETS ||--o{ TICKET_REPLIES : contains
-
-    CATEGORIES {
-        int category_id PK
-        string name UK
-        string slug UK
-        int sort_order
-    }
-
-    PRODUCTS {
-        int product_id PK
-        int category_id FK
-        string name
-        string capacity
-        decimal price
-        int stock
-        string image
-        text description
-        boolean is_deleted
-        timestamp created_at
-    }
-
-    USERS {
-        int user_id PK
-        string name
-        string email UK
-        string phone
-        string password_hash
-        boolean must_change_password
-        timestamp created_at
-    }
-
-    USER_ROLES {
-        int user_id PK,FK
-        enum role PK "admin | staff"
-    }
-
-    ORDERS {
-        int order_id PK
-        string customer_name
-        string customer_phone
-        string customer_email
-        decimal total
-        enum status "Pending | Confirmed | In Production | Delivered | Cancelled"
-        string address
-        string access_password_hash
-        timestamp created_at
-    }
-
-    ORDER_ITEMS {
-        int item_id PK
-        int order_id FK
-        int product_id FK
-        string product_name
-        int quantity
-        decimal unit_price
-    }
-
-    STOCK_ADJUSTMENTS {
-        int adjustment_id PK
-        int product_id FK
-        int quantity_change
-        string reason
-        enum status "Pending | Approved | Rejected"
-        int requested_by FK
-        timestamp created_at
-    }
-
-    SUPPORT_TICKETS {
-        int ticket_id PK
-        string customer_name
-        string customer_email
-        string subject
-        enum priority "Low | Normal | High | Urgent"
-        enum status "Open | In Progress | Resolved | Closed"
-        timestamp created_at
-    }
-```
-
----
-
-## 🔒 Authentication & Security
-
-- **Session Cookies**: Upon login, a secure `pf_session` cookie is issued (`httpOnly: true`, `secure: true`, `sameSite: "lax"`, 14-day expiry).
-- **HMAC Signatures**: Session payloads are signed on the server using `crypto.createHmac("sha256", SESSION_SECRET)`.
-- **Timing-Attack Protection**: Cookie validation utilizes `crypto.timingSafeEqual` to safeguard against timing side-channel attacks.
-- **Password Protection**: Passwords are encrypted using `bcryptjs` with 10 salt rounds.
-- **Server-Side Authorization**: Every administrative endpoint enforces `requireAdmin()` or `requireStaffOrAdmin()` on the server; client-side UI restrictions cannot be bypassed.
-- **Price Integrity**: Checkout reads `product_id` and recalculates subtotals directly from the database, ignoring any manipulated client price values.
-- **Rate Limiting & Sanitization**: Public endpoints (order tracking, contact messages, quote requests) are protected by rate limiters and input sanitizers.
-
----
-
-## 🔌 API & Server Functions
-
-All endpoints are built using TanStack Start's type-safe `createServerFn`:
-
-### Catalog & Public Services
-
-- `getProducts` (`GET`): Returns full product list with joined category names.
-- `getProduct` (`POST`): Returns a single product by `id`.
-- `getCategories` (`GET`): Returns active categories sorted by display order.
-- `placeOrder` (`POST`): Places an order with items and delivery address, supporting both staff checkout and guest checkout with order access credentials.
-- `submitQuote` (`POST`): Records a quote inquiry linked to user or guest contact details.
-- `getOrderStatusPublic` (`POST`): Allows guest order tracking by order reference and access credentials.
-
-### Authentication & Sessions
-
-- `getMe` (`GET`): Resolves the currently authenticated user and their active role (`admin` or `staff`).
-- `login` (`POST`): Validates email and password, creates signed session cookie, returns user data.
-- `logout` (`POST`): Clears session cookie and invalidates client query cache.
-- `changePassword` (`POST`): Securely updates account password and clears password-reset flags.
-
-### Admin & Staff Operations (`requireStaffOrAdmin` / `requireAdmin`)
-
-- `getAdminOverview` (`GET`): Aggregates sales statistics, daily revenue, order statuses, and low-stock indicators.
-- `getOrdersPage` (`GET`): Paginated order listing with status, search, and date filters.
-- `saveProduct` (`POST`): Creates or updates catalog item details (requires admin).
-- `deleteProduct` / `softDeleteProduct` (`POST`): Removes or archives products from the active catalog (requires admin).
-- `setOrderStatus` (`POST`): Validates and advances order lifecycle states.
-- `recordOrderDispatch` & `completeOrderDelivery` (`POST`): Logs fulfillment milestones with driver notes and timestamps.
-- `getStockAdjustments`, `approveStockAdjustment`, `rejectStockAdjustment`: Stock governance workflow with reason logging.
-- `getContactMessages` & `getSupportTickets`: Customer communication and ticketing inbox.
-- `getCompanySettings` & `updateCompanySetting`: Business contact lines, address, and VAT registration configurations.
-- `exportReportCSV` & `exportCustomersCSV`: Data exports formatted for auditing and accounting.
+1. **`users` & `user_roles`**: Administrative and staff accounts with bcrypt password hashes, active flags, and `must_change_password` first-login policy.
+2. **`products` & `categories`**: Catalog items with capacity, pricing, stock, images, and category associations.
+3. **`orders` & `order_items`**: Order records with customer contact, status, payment details, and line items.
+4. **`order_access`**: Secure hashed guest access passes for order tracking without user registration.
+5. **`order_status_history`**: Audit trail of order status progression with timestamps and staff user attribution.
+6. **`order_deliveries`**: Delivery dispatch records, driver assignments, and delivery notes.
+7. **`order_internal_notes`**: Confidential staff notes kept separate from customer-visible communication.
+8. **`quote_requests` & `quote_replies`**: Inbound quote inquiries, price responses, validity terms, and customer threads.
+9. **`conversation_tokens`**: Expiring cryptographic tokens for token-authenticated customer messaging.
+10. **`stock_adjustments` & `stock_movements`**: Inventory adjustment requests with mandatory reasons and approvals.
+11. **`contact_messages` & `contact_message_replies`**: Storefront inquiries and response threads.
+12. **`support_tickets` & `support_ticket_replies`**: Structured customer support tickets with priority levels.
+13. **`audit_logs`**: System audit records capturing administrative and staff actions.
+14. **`app_settings`**: Key-value business configurations (company contact, VAT, staff quote thresholds).
 
 ---
 
@@ -378,10 +315,10 @@ The application will be accessible at `http://localhost:3000`.
 
 ## 🧪 Testing & Quality Assurance
 
-The test suite covers routing, RBAC permissions, storefront guest workflows, order state transitions, and server-side rules.
+The test suite includes 16 test files covering all 11 console modules, security gates, order transitions, and customer portals:
 
 ```sh
-# Run full Vitest test suite
+# Run full Vitest test suite (101 tests)
 npm test
 
 # Run tests in watch mode

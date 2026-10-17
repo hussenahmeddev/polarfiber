@@ -47,6 +47,12 @@ import { notify } from "../utils/notify";
 import { logAction } from "../utils/audit";
 import { changeStock } from "../utils/stock";
 import { encryptSmtpPassword } from "../utils/crypto";
+import {
+  generateConversationToken,
+  conversationTokenExpiry,
+  CONVERSATION_TOKEN_VALID_DAYS,
+  type ConversationType,
+} from "../utils/conversation-tokens";
 import { uploadToCloudinary, deleteFromCloudinary } from "../utils/cloudinary";
 
 const PRODUCT_SQL = `SELECT p.product_id,p.name,c.name category,p.capacity,p.price,p.stock,p.image,p.description
@@ -108,7 +114,7 @@ export const getProducts = createServerFn({ method: "GET" }).handler(async () =>
     try {
       return await rows<Product>(
         c,
-        `${PRODUCT_SQL} WHERE (p.status = 'active' OR p.status IS NULL) AND p.deleted_at IS NULL ORDER BY p.product_id`,
+        `${PRODUCT_SQL} WHERE (p.status = 'active' OR p.status IS NULL) AND p.deleted_at IS NULL AND c.is_active = 1 ORDER BY p.product_id`,
       );
     } catch {
       return await rows<Product>(c, `${PRODUCT_SQL} ORDER BY p.product_id`);
@@ -123,7 +129,7 @@ export const getProduct = createServerFn({ method: "POST" })
       try {
         const [p] = await rows<Product>(
           c,
-          `${PRODUCT_SQL} WHERE p.product_id=? AND (p.status = 'active' OR p.status IS NULL) AND p.deleted_at IS NULL`,
+          `${PRODUCT_SQL} WHERE p.product_id=? AND (p.status = 'active' OR p.status IS NULL) AND p.deleted_at IS NULL AND c.is_active = 1`,
           [data.id],
         );
         return p ?? null;
@@ -138,16 +144,17 @@ export const getProduct = createServerFn({ method: "POST" })
 export const getProductImage = createServerFn({ method: "GET" })
   .validator((d) => z.object({ id: z.coerce.number().int() }).parse(d))
   .handler(async ({ data }) => {
-    const [rows] = await withDb((c) =>
-      c.execute(
+    const imgRows = await withDb((c) =>
+      rows<{ image_data: string | Buffer; mime_type: string }>(
+        c,
         "SELECT image_data, mime_type FROM product_images WHERE product_id = ? AND is_primary = 1 LIMIT 1",
         [data.id],
       ),
     );
-    if (!rows[0]) return null;
+    if (!imgRows[0]) return null;
     return {
-      data: rows[0].image_data,
-      mimeType: rows[0].mime_type,
+      data: imgRows[0].image_data,
+      mimeType: imgRows[0].mime_type,
     };
   });
 
@@ -505,11 +512,16 @@ export const placeOrder = createServerFn({ method: "POST" })
         await c.commit();
 
         if (isGuest) {
+          startOrderSession(oid);
           const { sendOrderConfirmation } = await import("./email");
-          await sendOrderConfirmation(data.email!, data.name!, oid, total, data.access_password!);
+          try {
+            await sendOrderConfirmation(data.email!, data.name!, oid, total);
+          } catch {
+            // Email failure is non-fatal: order is saved, failure recorded for retry.
+          }
         }
 
-        return { order_id: oid };
+        return { order_id: oid, order_number: `PF-ORD-${oid}` };
       } catch (e) {
         await c.rollback().catch(() => {});
         throw e;
@@ -739,6 +751,114 @@ export const endOrderAccess = createServerFn({ method: "POST" }).handler(() => {
   return { ok: true };
 });
 
+/** Verify email + order-access password across all orders for that email. Returns matching orders only. */
+export const verifyOrderAccessByEmail = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        email: z.string().trim().email().max(255),
+        access_password: z.string().min(1).max(200),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const ip = getClientIp();
+    const attemptKey = `order-verify-email:${ip}:${data.email.toLowerCase()}`;
+
+    const rl = rateLimit(attemptKey, 5, 15 * 60 * 1000);
+    if (!rl.ok) {
+      throw Object.assign(new Error("Too many attempts. Please wait 15 minutes and try again."), {
+        status: 429,
+      });
+    }
+
+    const result = await withDb(async (c) => {
+      const accessRecords = await rows<{
+        order_id: number;
+        access_pass: string;
+        email: string;
+      }>(c, "SELECT order_id, access_pass, email FROM order_access WHERE email = ?", [
+        data.email.toLowerCase(),
+      ]);
+
+      const matchedOrderIds: number[] = [];
+      for (const record of accessRecords) {
+        const valid = await bcrypt.compare(data.access_password, record.access_pass);
+        if (valid) {
+          matchedOrderIds.push(record.order_id);
+        }
+      }
+
+      if (matchedOrderIds.length === 0) {
+        return { failed: true as const };
+      }
+
+      const orders = await rows<{
+        order_id: number;
+        order_number: string | null;
+        status: OrderStatus;
+        total: number;
+        address: string;
+        is_paid: number;
+        payment_method: string;
+        created_at: string;
+      }>(
+        c,
+        `SELECT o.order_id, o.order_number, o.status, o.total, o.address, o.is_paid,
+                o.payment_method, DATE(o.created_at) created_at
+         FROM orders o WHERE o.order_id IN (${matchedOrderIds.map(() => "?").join(",")})
+         ORDER BY o.order_id DESC`,
+        matchedOrderIds,
+      );
+
+      const itemsMap: Record<
+        number,
+        Array<{ product_id: number; product_name: string; quantity: number; unit_price: number }>
+      > = {};
+      if (orders.length) {
+        const items = await rows<{
+          order_id: number;
+          product_id: number;
+          product_name: string;
+          quantity: number;
+          unit_price: number;
+        }>(
+          c,
+          `SELECT order_id, product_id, product_name, quantity, unit_price
+           FROM order_items WHERE order_id IN (${orders.map(() => "?").join(",")})`,
+          orders.map((o) => o.order_id),
+        );
+        for (const item of items) {
+          const arr = itemsMap[item.order_id] ?? [];
+          arr.push(item);
+          itemsMap[item.order_id] = arr;
+        }
+      }
+
+      resetRateLimit(attemptKey);
+      await logAction(null, "VERIFY_ORDER_ACCESS_BY_EMAIL", "order", "multiple", null, {
+        matched_count: matchedOrderIds.length,
+      });
+      return {
+        failed: false as const,
+        orders: orders.map((o) => ({ ...o, items: itemsMap[o.order_id] ?? [] })),
+      };
+    });
+
+    if (result.failed) {
+      throw new Error("Invalid email or order-access password.");
+    }
+    return { ok: true, orders: result.orders };
+  });
+
+/** Start an order-scoped session for a specific verified order so the customer can view it. */
+export const startOrderAccessSession = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ order_id: z.number().int().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    startOrderSession(data.order_id);
+    return { ok: true };
+  });
+
 /** Staff/admin view of a conversation thread for one order. */
 export const getOrderMessages = createServerFn({ method: "POST" })
   .validator((d) => z.object({ order_id: z.number().int().min(1) }).parse(d))
@@ -825,9 +945,8 @@ export const sendOrderMessage = createServerFn({ method: "POST" })
           `Order #${data.order_id} - new message from Polar Fiber`,
           preview(body),
           "https://polarfiber.com.et/track-order",
-        ).catch((err) => {
-          console.error("[sendOrderMessage] Customer email failed:", err);
-        });
+          { conversationType: "order", conversationId: data.order_id },
+        );
       }
 
       if (contact.user_id) {
@@ -955,6 +1074,329 @@ export const sendGuestOrderMessage = createServerFn({ method: "POST" })
     });
   });
 
+/** Internal helper – creates (or reuses) a conversation token for a quote or contact message. */
+async function createConversationToken(
+  conversationType: ConversationType,
+  conversationId: number,
+  email: string,
+): Promise<string> {
+  const token = generateConversationToken();
+  const expiresAt = conversationTokenExpiry();
+  await withDb((c) =>
+    c.execute(
+      `INSERT INTO conversation_tokens (token, conversation_type, conversation_id, email, expires_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        token,
+        conversationType,
+        conversationId,
+        email,
+        expiresAt.toISOString().slice(0, 19).replace("T", " "),
+      ],
+    ),
+  );
+  return token;
+}
+
+/** Internal helper – looks up a valid (non-expired) token and its conversation. */
+interface ConversationTokenRecord {
+  token: string;
+  conversation_type: ConversationType;
+  conversation_id: number;
+  email: string;
+  expires_at: string;
+  created_at: string;
+}
+
+/** Messages returned to customers via conversation tokens. */
+interface ConversationMessage {
+  id: number;
+  sender_type: string;
+  sender_name: string;
+  reply_text: string;
+  is_internal: number;
+  created_at: string;
+  staff_id?: number | null;
+  staff_name?: string | null;
+  read?: number;
+}
+
+/** Public endpoint – retrieve a conversation by token (no auth required). */
+export const getConversation = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ token: z.string().min(1).max(64) }).parse(d))
+  .handler(async ({ data }) => {
+    const tokenRow = await withDb((c) =>
+      rows<ConversationTokenRecord>(
+        c,
+        `SELECT token, conversation_type, conversation_id, email, expires_at, created_at
+         FROM conversation_tokens WHERE token = ?`,
+        [data.token],
+      ),
+    );
+
+    if (!tokenRow || tokenRow.length === 0) {
+      throw Object.assign(new Error("Invalid or expired conversation link."), { status: 404 });
+    }
+
+    const record = tokenRow[0]!;
+    if (new Date(record.expires_at).getTime() < Date.now()) {
+      throw Object.assign(new Error("This conversation link has expired."), { status: 410 });
+    }
+
+    // Fetch messages based on conversation type
+    if (record.conversation_type === "quote") {
+      const messages = await withDb((c) =>
+        rows<ConversationMessage>(
+          c,
+          `SELECT id, sender_type, sender_name, reply_text, is_internal, created_at
+           FROM quote_replies WHERE quote_id = ?
+           ORDER BY created_at ASC`,
+          [record.conversation_id],
+        ),
+      );
+      return {
+        conversation_type: "quote" as const,
+        conversation_id: record.conversation_id,
+        email: record.email,
+        expires_at: record.expires_at,
+        messages: messages.filter((m) => !m.is_internal),
+      };
+    } else {
+      // contact_message
+      const messages = await withDb((c) =>
+        rows<ConversationMessage>(
+          c,
+          `SELECT m.id, m.staff_id, m.staff_name, m.reply_text, m.is_internal, m.created_at, m.read
+           FROM contact_message_replies m
+           WHERE m.message_id = ?
+           ORDER BY m.created_at ASC`,
+          [record.conversation_id],
+        ),
+      );
+      return {
+        conversation_type: "contact_message" as const,
+        conversation_id: record.conversation_id,
+        email: record.email,
+        expires_at: record.expires_at,
+        messages: messages.filter((m) => !m.is_internal),
+      };
+    }
+  });
+
+/** Public endpoint – submit a customer reply using a conversation token. */
+export const replyConversation = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        token: z.string().min(1).max(64),
+        message: z.string().trim().min(1).max(5000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const tokenRow = await withDb((c) =>
+      rows<ConversationTokenRecord>(
+        c,
+        `SELECT token, conversation_type, conversation_id, email, expires_at
+         FROM conversation_tokens WHERE token = ?`,
+        [data.token],
+      ),
+    );
+
+    if (!tokenRow || tokenRow.length === 0) {
+      throw Object.assign(new Error("Invalid or expired conversation link."), { status: 404 });
+    }
+
+    const record = tokenRow[0]!;
+    if (new Date(record.expires_at).getTime() < Date.now()) {
+      throw Object.assign(new Error("This conversation link has expired."), { status: 410 });
+    }
+
+    // Get sanitized message content
+    const cleanText = sanitizeMessage(data.message);
+
+    if (record.conversation_type === "quote") {
+      // Insert customer reply into quote_replies
+      const result = await withDb((c) =>
+        c.execute(
+          `INSERT INTO quote_replies (quote_id, sender_type, sender_name, reply_text, is_internal)
+           VALUES (?, 'customer', ?, ?, 0)`,
+          [record.conversation_id, record.email, cleanText],
+        ),
+      );
+
+      const [r] = result;
+      const replyId = (r as { insertId: number }).insertId;
+
+      // Record the audit trail
+      await logAction(null, "QUOTE_CUSTOMER_REPLY", "quote_reply", replyId, null, {
+        quote_id: record.conversation_id,
+        from_email: record.email,
+        message_preview: data.message.slice(0, 100),
+      });
+
+      return { reply_id: replyId, conversation_type: "quote" };
+    } else {
+      // contact_message
+      const result = await withDb((c) =>
+        c.execute(
+          `INSERT INTO contact_message_replies (message_id, staff_id, staff_name, reply_text, is_internal)
+           VALUES (?, NULL, ?, ?, 0)`,
+          [record.conversation_id, record.email, cleanText],
+        ),
+      );
+
+      const [r] = result;
+      const replyId = (r as { insertId: number }).insertId;
+
+      // Record the audit trail
+      await logAction(null, "CONTACT_CUSTOMER_REPLY", "contact_message_reply", replyId, null, {
+        message_id: record.conversation_id,
+        from_email: record.email,
+        message_preview: data.message.slice(0, 100),
+      });
+
+      return { reply_id: replyId, conversation_type: "contact_message" };
+    }
+  });
+
+/** Staff endpoint – view all replies for a quote (includes internal notes). */
+export const getQuoteReplies = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ quote_id: z.number().int().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("quotes.view");
+    return withDb((c) =>
+      c.execute(
+        `SELECT id, sender_type, sender_name, reply_text, is_internal, created_at
+         FROM quote_replies WHERE quote_id = ?
+         ORDER BY created_at ASC`,
+        [data.quote_id],
+      ),
+    );
+  });
+
+/** Staff endpoint – view line items for a quote. */
+export const getQuoteItems = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ quote_id: z.number().int().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("quotes.view");
+    return withDb((c) =>
+      rows<{
+        id: number;
+        quote_id: number;
+        product_id: number | null;
+        product_name: string;
+        quantity: number;
+        unit_price: number;
+      }>(
+        c,
+        `SELECT id, quote_id, product_id, product_name, quantity, unit_price
+         FROM quote_items WHERE quote_id = ?
+         ORDER BY id ASC`,
+        [data.quote_id],
+      ),
+    );
+  });
+
+/** Staff endpoint – save/replace line items for a quote. */
+export const saveQuoteItems = createServerFn({ method: "POST" })
+  .validator((d) =>
+    z
+      .object({
+        quote_id: z.number().int().min(1),
+        items: z
+          .array(
+            z.object({
+              product_id: z.number().int().nullable().optional(),
+              product_name: z.string().trim().min(1).max(150),
+              quantity: z.number().int().min(1).max(10000),
+              unit_price: z.number().min(0).max(1e9),
+            }),
+          )
+          .min(1)
+          .max(100),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const u = await requirePermission("quotes.respond");
+    return withDb(async (c) => {
+      const [q] = await rows<{ quote_id: number }>(c, "SELECT quote_id FROM quote_requests WHERE quote_id=?", [
+        data.quote_id,
+      ]);
+      if (!q) throw new Error("Quote not found.");
+
+      await c.beginTransaction();
+      try {
+        await c.execute("DELETE FROM quote_items WHERE quote_id=?", [data.quote_id]);
+        for (const item of data.items) {
+          await c.execute(
+            `INSERT INTO quote_items (quote_id, product_id, product_name, quantity, unit_price)
+             VALUES (?, ?, ?, ?, ?)`,
+            [data.quote_id, item.product_id ?? null, item.product_name, item.quantity, item.unit_price],
+          );
+        }
+        await c.commit();
+      } catch (e) {
+        await c.rollback().catch(() => {});
+        throw e;
+      }
+      return { ok: true, count: data.items.length };
+    });
+  });
+
+/** Staff endpoint – view all replies for a contact message (includes internal notes). */
+export const getContactMessageReplies = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ message_id: z.number().int().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("messages.view");
+    return withDb((c) =>
+      rows<{
+        id: number;
+        staff_id: number;
+        staff_name: string;
+        reply_text: string;
+        is_internal: number;
+        created_at: string;
+        read: number;
+      }>(
+        c,
+        `SELECT id, staff_id, staff_name, reply_text, is_internal, created_at, read
+         FROM contact_message_replies WHERE message_id = ?
+         ORDER BY id ASC`,
+        [data.message_id],
+      ),
+    );
+  });
+
+/** Staff endpoint – list email failures for retry. */
+export const getFailedEmails = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ limit: z.number().int().min(1).max(200).optional() }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("messages.view");
+    const limit = data.limit ?? 50;
+    return withDb((c) =>
+      c.execute(
+        `SELECT id, recipient, subject, conversation_type, conversation_id, error, retry_count, next_retry_at, created_at
+         FROM email_failures
+         WHERE retry_count < 3
+         ORDER BY created_at DESC
+         LIMIT ?`,
+        [limit],
+      ),
+    );
+  });
+
+/** Staff endpoint – retry a previously failed email delivery. */
+export const retryEmailDelivery = createServerFn({ method: "POST" })
+  .validator((d) => z.object({ id: z.number().int().min(1) }).parse(d))
+  .handler(async ({ data }) => {
+    await requirePermission("messages.reply");
+    const { retryEmail } = await import("./email");
+    const ok = await retryEmail(data.id);
+    return { ok };
+  });
+
 /** Internal staff notes — never returned by any guest/public endpoint. */
 export const getOrderInternalNotes = createServerFn({ method: "POST" })
   .validator((d) => z.object({ order_id: z.number().int().min(1) }).parse(d))
@@ -1042,12 +1484,20 @@ export const submitQuote = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const u = await currentUser();
-    await withDb((c) =>
-      c.execute(
+    await withDb(async (c) => {
+      const [r] = await c.execute(
         "INSERT INTO quote_requests (user_id,name,email,subject,message) VALUES (?,?,?,?,?)",
         [u?.user_id ?? null, data.name, data.email, data.subject, data.message],
-      ),
-    );
+      );
+      const quoteId = (r as { insertId: number }).insertId;
+
+      // quote_number must be backfilled after the insert: MySQL cannot derive it
+      // from the AUTO_INCREMENT id at INSERT time, and the column has no default.
+      await c.execute("UPDATE quote_requests SET quote_number=? WHERE quote_id=?", [
+        `PF-QT-${quoteId}`,
+        quoteId,
+      ]);
+    });
     return { ok: true };
   });
 
@@ -1097,6 +1547,14 @@ export const getAdminOverview = createServerFn({ method: "GET" }).handler(async 
           )
         )[0];
     const [ordCount] = await rows<{ count: number }>(c, "SELECT COUNT(*) as count FROM orders");
+    const [pendingOrdersKpi] = await rows<{ count: number }>(
+      c,
+      "SELECT COUNT(*) as count FROM orders WHERE status = 'Pending'",
+    );
+    const [completedOrders] = await rows<{ count: number }>(
+      c,
+      "SELECT COUNT(*) as count FROM orders WHERE status = 'Delivered'",
+    );
     const [quoteCount] = await rows<{ count: number }>(
       c,
       "SELECT COUNT(*) as count FROM quote_requests WHERE status = 'New'",
@@ -1104,6 +1562,30 @@ export const getAdminOverview = createServerFn({ method: "GET" }).handler(async 
     const [lowStock] = await rows<{ count: number }>(
       c,
       "SELECT COUNT(*) as count FROM products WHERE stock <= 5",
+    );
+    const [unreadMessages] = await rows<{ count: number }>(
+      c,
+      "SELECT COUNT(*) as count FROM contact_messages WHERE is_read = 0",
+    );
+    // Distinct customers across orders, quotes, and contact messages.
+    // Registered users are counted by user_id; guests by email.
+    const [customerCount] = await rows<{ count: number }>(
+      c,
+      `SELECT COUNT(DISTINCT identifier) as count FROM (
+        SELECT CONVERT(user_id, CHAR) COLLATE utf8mb4_unicode_ci as identifier FROM orders WHERE user_id IS NOT NULL
+        UNION
+        SELECT CONVERT(user_id, CHAR) COLLATE utf8mb4_unicode_ci as identifier FROM quote_requests WHERE user_id IS NOT NULL
+        UNION
+        SELECT CONVERT(oa.email, CHAR) COLLATE utf8mb4_unicode_ci as identifier FROM orders o
+          JOIN order_access oa ON oa.order_id = o.order_id
+          WHERE o.user_id IS NULL AND oa.email IS NOT NULL AND oa.email != ''
+        UNION
+        SELECT CONVERT(email, CHAR) COLLATE utf8mb4_unicode_ci as identifier FROM quote_requests
+          WHERE user_id IS NULL AND email IS NOT NULL AND email != ''
+        UNION
+        SELECT CONVERT(email, CHAR) COLLATE utf8mb4_unicode_ci as identifier FROM contact_messages
+          WHERE email IS NOT NULL AND email != ''
+      ) as t`,
     );
 
     // 2. Timeline (Last 30 days daily orders & revenue)
@@ -1192,8 +1674,12 @@ export const getAdminOverview = createServerFn({ method: "GET" }).handler(async 
       kpis: {
         totalRevenue: isStaff ? 0 : Number(rev?.revenue ?? 0),
         totalOrders: Number(ordCount?.count ?? 0),
+        pendingOrders: Number(pendingOrdersKpi?.count ?? 0),
+        completedOrders: Number(completedOrders?.count ?? 0),
         newQuotes: Number(quoteCount?.count ?? 0),
         lowStockCount: Number(lowStock?.count ?? 0),
+        customers: Number(customerCount?.count ?? 0),
+        unreadMessages: Number(unreadMessages?.count ?? 0),
       },
       timeline,
       categoryRevenue,
@@ -1372,7 +1858,8 @@ const productInput = z.object({
 export const saveProduct = createServerFn({ method: "POST" })
   .validator((d) => productInput.parse(d))
   .handler(async ({ data }) => {
-    const u = await requirePermission("products.update");
+    const requiredPerm = data.product_id === 0 ? "products.create" : "products.update";
+    const u = await requirePermission(requiredPerm);
     let productId = data.product_id;
     await withDb(async (c) => {
       const cat = (
@@ -1382,12 +1869,23 @@ export const saveProduct = createServerFn({ method: "POST" })
       )[0];
       if (!cat) throw new Error("Unknown category.");
 
+      // SKU/slug uniqueness validation — check before writing so duplicates
+      // return friendly errors instead of DB unique-constraint violations.
+      const trimSku = (data.sku ?? "").trim();
+      const trimSlug = (data.slug ?? "").trim();
+
       if (data.product_id === 0) {
-        if (u.role === "staff") {
-          const err = new Error("Staff members are not permitted to create new products.");
-          (err as any).statusCode = 403;
-          throw err;
+
+        if (trimSku) {
+          const dup = await rows(c, "SELECT 1 FROM products WHERE sku=?", [trimSku]);
+          if (dup.length) throw new Error(`SKU "${trimSku}" is already in use.`);
         }
+
+        if (trimSlug) {
+          const dup = await rows(c, "SELECT 1 FROM products WHERE slug=?", [trimSlug]);
+          if (dup.length) throw new Error(`Slug "${trimSlug}" is already in use.`);
+        }
+
         const v = [
           cat.category_id,
           data.name,
@@ -1404,9 +1902,9 @@ export const saveProduct = createServerFn({ method: "POST" })
         productId = (r as { insertId: number }).insertId;
 
         // Auto-generate sku/slug if not supplied
-        const finalSku = (data.sku ?? "").trim() || `PF-${String(productId).padStart(5, "0")}`;
+        const finalSku = trimSku || `PF-${String(productId).padStart(5, "0")}`;
         const baseSlug =
-          (data.slug ?? "").trim() ||
+          trimSlug ||
           data.name
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, "-")
@@ -1429,6 +1927,23 @@ export const saveProduct = createServerFn({ method: "POST" })
           const err = new Error("Staff members are not permitted to modify product prices.");
           (err as any).statusCode = 403;
           throw err;
+        }
+
+        // Uniqueness checks for edits (exclude the product itself).
+        if (trimSku && trimSku !== (oldProduct.sku ?? "")) {
+          const dup = await rows(c, "SELECT 1 FROM products WHERE sku=? AND product_id!=?", [
+            trimSku,
+            data.product_id,
+          ]);
+          if (dup.length) throw new Error(`SKU "${trimSku}" is already in use.`);
+        }
+
+        if (trimSlug && trimSlug !== (oldProduct.slug ?? "")) {
+          const dup = await rows(c, "SELECT 1 FROM products WHERE slug=? AND product_id!=?", [
+            trimSlug,
+            data.product_id,
+          ]);
+          if (dup.length) throw new Error(`Slug "${trimSlug}" is already in use.`);
         }
 
         const effectivePrice = u.role === "staff" ? oldProduct.price : data.price;
@@ -1900,11 +2415,9 @@ export const getGuestOrderStatus = createServerFn({ method: "POST" })
         created_at: string;
       }>(c, `${MESSAGE_SELECT} WHERE m.order_id = ? ORDER BY m.id ASC`, [data.order_id]);
 
-      const [delivery] = await rows<DeliveryRow>(
-        c,
-        `${DELIVERY_SELECT} WHERE dv.order_id = ?`,
-        [data.order_id],
-      );
+      const [delivery] = await rows<DeliveryRow>(c, `${DELIVERY_SELECT} WHERE dv.order_id = ?`, [
+        data.order_id,
+      ]);
 
       await c.execute(
         "UPDATE order_messages SET is_read_by_customer = 1 WHERE order_id = ? AND sender_type <> 'customer'",
@@ -2178,6 +2691,57 @@ export const setQuoteStatus = createServerFn({ method: "POST" })
         "/track-order",
       );
 
+      // Save reply to quote_replies table and email customer via conversation link
+      let conversationToken: string | null = null;
+      if (data.reply_message) {
+        const cleanText = sanitizeMessage(data.reply_message);
+
+        await c.execute(
+          `INSERT INTO quote_replies (quote_id, sender_type, sender_name, reply_text, is_internal)
+           VALUES (?, 'staff', ?, ?, 0)`,
+          [data.id, u.name, cleanText],
+        );
+
+        // Create or refresh a conversation token and email the customer
+        const deleted = await c.execute(
+          `DELETE FROM conversation_tokens WHERE conversation_type = 'quote' AND conversation_id = ?`,
+          [data.id],
+        );
+        conversationToken = await createConversationToken("quote", data.id, existing.email);
+
+        const conversationUrl = `https://polarfiber.com.et/conversation/${conversationToken}`;
+        const expiresInDays = CONVERSATION_TOKEN_VALID_DAYS;
+
+        await import("./email").then((emailMod) =>
+          emailMod.sendConversationNotificationEmail({
+            to: existing.email,
+            subject: `Quote #${existing.quote_id} Update`,
+            text:
+              `Hello,\n\nYour quote request #${existing.quote_id} has been updated.\n\n` +
+              `Staff reply: ${data.reply_message}\n\n` +
+              `You can view and respond to this conversation securely via:\n${conversationUrl}\n\n` +
+              `This link expires in ${expiresInDays} days.\n\n` +
+              `Thank you for choosing Polar Fiber!`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #0ea5e9;">Quote Update — #${existing.quote_id}</h2>
+                <p>Your quote request has been updated by our team.</p>
+                <div style="background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 15px 0;">
+                  <p style="margin: 0;"><strong>"Staff Reply:</strong></p>
+                  <p style="margin: 5px 0 0 0;">${cleanText.replace(/\n/g, "<br/>")}</p>
+                </div>
+                <p>To view this conversation and reply, use your secure link below (expires in ${expiresInDays} days):</p>
+                <p style="margin: 15px 0;"><a href="${conversationUrl}" style="display: inline-block; background: #0ea5e9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px;">View Conversation</a></p>
+                <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;" />
+                <p style="color: #64748b; font-size: 14px;">Thank you for choosing Polar Fiber!</p>
+              </div>`,
+            conversationUrl,
+            expiresInDays,
+            ctx: { conversationType: "quote", conversationId: data.id },
+          }),
+        );
+      }
+
       await logAction(
         null,
         "UPDATE_QUOTE_STATUS",
@@ -2243,8 +2807,8 @@ export const convertQuoteToOrder = createServerFn({ method: "POST" })
         status: string;
       }>(c, `${QUOTE_SQL} WHERE quote_id=?`, [data.quote_id]);
       if (!q) throw new Error("Quote not found.");
-      if (!["Replied", "Reviewing", "New"].includes(q.status))
-        throw new Error("Only active quotes (New/Replied/Reviewing) can be converted to orders.");
+      if (!["Replied", "Reviewing", "New", "Accepted"].includes(q.status))
+        throw new Error("Only active quotes (New/Replied/Reviewing/Accepted) can be converted to orders.");
       if (!q.quoted_amount || q.quoted_amount <= 0)
         throw new Error("Quote must have a quoted amount before conversion.");
 
@@ -2290,11 +2854,34 @@ export const convertQuoteToOrder = createServerFn({ method: "POST" })
           orderId,
         ]);
 
-        await c.execute(
-          `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price)
-           VALUES (?, NULL, ?, 1, ?)`,
-          [orderId, `Quote #${q.quote_id} — ${q.email}`, q.quoted_amount],
+        // Copy quote line items into order items — no stock deduction at
+        // conversion; stock is deducted when the order is confirmed/placed.
+        const quoteItems = await rows<{
+          product_id: number | null;
+          product_name: string;
+          quantity: number;
+          unit_price: number;
+        }>(
+          c,
+          "SELECT product_id, product_name, quantity, unit_price FROM quote_items WHERE quote_id=?",
+          [data.quote_id],
         );
+        if (quoteItems.length > 0) {
+          for (const it of quoteItems) {
+            await c.execute(
+              `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price)
+               VALUES (?, ?, ?, ?, ?)`,
+              [orderId, it.product_id, it.product_name, it.quantity, it.unit_price],
+            );
+          }
+        } else {
+          // Fallback for legacy quotes without line items
+          await c.execute(
+            `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price)
+             VALUES (?, NULL, ?, 1, ?)`,
+            [orderId, `Quote #${q.quote_id} — ${q.email}`, q.quoted_amount],
+          );
+        }
 
         await c.execute(
           "INSERT INTO order_status_history (order_id, status, notes, changed_by) VALUES (?, 'Pending', 'Converted from Quote', ?)",
@@ -2664,41 +3251,98 @@ export const replyContactMessage = createServerFn({ method: "POST" })
         quote_id: z.number().int().optional(),
         email: z.string().email(),
         message: z.string().min(1),
+        is_internal: z.boolean().optional(),
       })
       .parse(d),
   )
   .handler(async ({ data }) => {
     const u = await requirePermission("messages.reply");
+    const isInternal = Boolean(data.is_internal);
     await withDb(async (c) => {
       if (data.message_id) {
+        const cleanText = sanitizeMessage(data.message);
         await c.execute(
-          "INSERT INTO message_replies (message_id, sender_id, reply_text) VALUES (?, ?, ?)",
-          [data.message_id, u.user_id, data.message],
+          `INSERT INTO contact_message_replies (message_id, staff_id, staff_name, reply_text, is_internal)
+           VALUES (?, ?, ?, ?, ?)`,
+          [data.message_id, u.user_id, u.name, cleanText, isInternal ? 1 : 0],
         );
+        if (!isInternal) {
+          await c.execute(
+            "INSERT INTO message_replies (message_id, sender_id, reply_text) VALUES (?, ?, ?)",
+            [data.message_id, u.user_id, data.message],
+          );
+        }
       }
-      const [target] = await rows<{ user_id: number }>(
-        c,
-        "SELECT user_id FROM users WHERE email=?",
-        [data.email.toLowerCase()],
-      );
-      if (target) {
-        await notify(
-          target.user_id,
-          "message_reply",
-          "New Message from Polar Fiber Support",
-          data.message,
-          "/contact",
+
+      // Only notify & email the customer if this is NOT an internal note
+      if (!isInternal) {
+        const [target] = await rows<{ user_id: number }>(
+          c,
+          "SELECT user_id FROM users WHERE email=?",
+          [data.email.toLowerCase()],
         );
+        if (target) {
+          await notify(
+            target.user_id,
+            "message_reply",
+            "New Message from Polar Fiber Support",
+            data.message,
+            "/contact",
+          );
+        }
+
+        // For non-registered customers: save reply and email a secure conversation link
+        if (data.message_id) {
+          const cleanText = sanitizeMessage(data.message);
+          const conversationToken = await createConversationToken(
+            "contact_message",
+            data.message_id,
+            data.email,
+          );
+          const conversationUrl = `https://polarfiber.com.et/conversation/${conversationToken}`;
+          const expiresInDays = CONVERSATION_TOKEN_VALID_DAYS;
+
+          await import("./email").then((emailMod) =>
+            emailMod.sendConversationNotificationEmail({
+              to: data.email,
+              subject: "New Reply from Polar Fiber Support",
+              text:
+                `Hello,\n\nYou received a reply from our support team.\n\n` +
+                `Reply: ${data.message}\n\n` +
+                `You can view and respond to this conversation securely via:\n${conversationUrl}\n\n` +
+                `This link expires in ${expiresInDays} days.\n\n` +
+                `Thank you for choosing Polar Fiber!`,
+              html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                  <h2 style="color: #0ea5e9;">New Support Reply</h2>
+                  <p>You received a reply from our support team.</p>
+                  <div style="background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin: 15px 0;">
+                    <p style="margin: 0;"><strong>Reply:</strong></p>
+                    <p style="margin: 5px 0 0 0;">${cleanText.replace(/\n/g, "<br/>")}</p>
+                  </div>
+                  <p>To view this conversation and reply, use your secure link below (expires in ${expiresInDays} days):</p>
+                  <p style="margin: 15px 0;"><a href="${conversationUrl}" style="display: inline-block; background: #0ea5e9; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px;">View Conversation</a></p>
+                  <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;" />
+                  <p style="color: #64748b; font-size: 14px;">Thank you for choosing Polar Fiber!</p>
+                </div>`,
+              conversationUrl,
+              expiresInDays,
+              ctx: { conversationType: "contact_message", conversationId: data.message_id as number },
+            }),
+          );
+        }
       }
+
       await logAction(
         null,
-        "REPLY_MESSAGE",
+        isInternal ? "INTERNAL_NOTE_MESSAGE" : "REPLY_MESSAGE",
         "message",
         data.message_id ?? data.quote_id ?? data.email,
         null,
         {
           email: data.email,
           message: data.message,
+          is_internal: isInternal,
         },
       );
     });
@@ -3038,7 +3682,7 @@ export const createTeamMember = createServerFn({ method: "POST" })
         phone: z.string().trim().max(20).default(""),
         temporaryPassword: z
           .string()
-          .min(8, "Temporary password must be at least 8 characters")
+          .min(6, "Temporary password must be at least 6 characters")
           .max(200),
         role: z.enum(["staff", "admin"]).default("staff"),
       })
@@ -3113,7 +3757,7 @@ export const getUserPermissions = createServerFn({ method: "GET" }).handler(asyn
 export const logExportAction = createServerFn({ method: "POST" })
   .validator((d) => z.object({ count: z.number().int() }).parse(d))
   .handler(async ({ data }) => {
-    const u = await requirePermission("orders.view");
+    const u = await requirePermission("reports.export");
     await logAction(null, "EXPORT_ORDERS_CSV", "orders", "csv", null, {
       exported_by: u.name,
       count: data.count,
@@ -3138,15 +3782,17 @@ export const getCategories = createServerFn({ method: "GET" }).handler(async () 
       parent_id: number | null;
       parent_name: string | null;
       sort_order: number;
+      is_active: number;
       product_count: number;
       created_at: string;
     }>(
       c,
       `SELECT c.category_id, c.name, c.slug, c.description,
               c.parent_id, p.name parent_name, COALESCE(c.sort_order,0) sort_order,
+              COALESCE(c.is_active,1) is_active,
               (SELECT COUNT(*) FROM products pr
                WHERE pr.category_id = c.category_id
-                 AND (pr.deleted_at IS NULL OR pr.deleted_at = '0000-00-00 00:00:00')) product_count,
+                 AND pr.deleted_at IS NULL) product_count,
               DATE(c.created_at) created_at
        FROM categories c
        LEFT JOIN categories p ON p.category_id = c.parent_id
@@ -3170,6 +3816,7 @@ export const saveCategory = createServerFn({ method: "POST" })
         description: z.string().trim().max(500).nullable().optional(),
         parent_id: z.number().int().nullable().optional(),
         sort_order: z.number().int().min(0).max(9999).default(0),
+        is_active: z.boolean().optional().default(true),
       })
       .parse(d),
   )
@@ -3182,16 +3829,16 @@ export const saveCategory = createServerFn({ method: "POST" })
         const slugDup = await rows(c, "SELECT 1 FROM categories WHERE slug=?", [data.slug]);
         if (slugDup.length) throw new Error("A category with this slug already exists.");
         const [r] = await c.execute(
-          "INSERT INTO categories (name, slug, description, parent_id, sort_order) VALUES (?,?,?,?,?)",
-          [data.name, data.slug, data.description ?? null, data.parent_id ?? null, data.sort_order],
+          "INSERT INTO categories (name, slug, description, parent_id, sort_order, is_active) VALUES (?,?,?,?,?,?)",
+          [data.name, data.slug, data.description ?? null, data.parent_id ?? null, data.sort_order, data.is_active ? 1 : 0],
         );
         const id = (r as { insertId: number }).insertId;
         await logAction(null, "CREATE_CATEGORY", "category", id, null, data);
         return { ok: true, category_id: id };
       } else {
-        const [old] = await rows<{ name: string; slug: string }>(
+        const [old] = await rows<{ name: string; slug: string; is_active: number }>(
           c,
-          "SELECT name, slug FROM categories WHERE category_id=?",
+          "SELECT name, slug, is_active FROM categories WHERE category_id=?",
           [data.category_id],
         );
         if (!old) throw new Error("Category not found.");
@@ -3210,13 +3857,14 @@ export const saveCategory = createServerFn({ method: "POST" })
           if (dup.length) throw new Error("A category with this slug already exists.");
         }
         await c.execute(
-          "UPDATE categories SET name=?, slug=?, description=?, parent_id=?, sort_order=? WHERE category_id=?",
+          "UPDATE categories SET name=?, slug=?, description=?, parent_id=?, sort_order=?, is_active=? WHERE category_id=?",
           [
             data.name,
             data.slug,
             data.description ?? null,
             data.parent_id ?? null,
             data.sort_order,
+            data.is_active ? 1 : 0,
             data.category_id,
           ],
         );
@@ -3233,7 +3881,7 @@ export const deleteCategory = createServerFn({ method: "POST" })
     return withDb(async (c) => {
       const [cnt] = await rows<{ count: number }>(
         c,
-        "SELECT COUNT(*) count FROM products WHERE category_id=? AND (deleted_at IS NULL OR deleted_at='0000-00-00 00:00:00')",
+        "SELECT COUNT(*) count FROM products WHERE category_id=? AND deleted_at IS NULL",
         [data.id],
       );
       if ((cnt?.count ?? 0) > 0)
@@ -3446,6 +4094,27 @@ export const getCustomerDetail = createServerFn({ method: "POST" })
       const recentOrders = await loadOrders("WHERE o.user_id=? ORDER BY o.order_id DESC LIMIT 10", [
         data.user_id,
       ]);
+      const recentQuotes = await rows<{
+        quote_id: number;
+        subject: string;
+        status: string;
+        quoted_amount: number | null;
+        created_at: string;
+      }>(
+        c,
+        "SELECT quote_id, subject, status, quoted_amount, DATE(created_at) created_at FROM quote_requests WHERE user_id=? OR email=? ORDER BY quote_id DESC LIMIT 10",
+        [data.user_id, u.email],
+      );
+      const recentMessages = await rows<{
+        id: number;
+        subject: string;
+        is_read: number;
+        created_at: string;
+      }>(
+        c,
+        "SELECT id, subject, is_read, DATE(created_at) created_at FROM contact_messages WHERE email=? ORDER BY id DESC LIMIT 10",
+        [u.email],
+      );
       return {
         ...u,
         orders_count: Number(stats?.orders_count ?? 0),
@@ -3457,6 +4126,11 @@ export const getCustomerDetail = createServerFn({ method: "POST" })
               items: o.items.map((it) => ({ ...it, unit_price: 0 })),
             }))
           : recentOrders,
+        recent_quotes: recentQuotes.map((q) => ({
+          ...q,
+          quoted_amount: isStaff ? 0 : q.quoted_amount,
+        })),
+        recent_messages: recentMessages,
       };
     });
   });
@@ -3676,7 +4350,7 @@ export const getSalesReport = createServerFn({ method: "POST" })
         c,
         `SELECT p.product_id, p.name, p.stock, c.name category
          FROM products p JOIN categories c ON c.category_id=p.category_id
-         WHERE p.stock <= ? AND (p.deleted_at IS NULL OR p.deleted_at='0000-00-00 00:00:00')
+         WHERE p.stock <= ? AND p.deleted_at IS NULL
          ORDER BY p.stock ASC`,
         [threshold],
       );
@@ -3729,7 +4403,7 @@ export const exportReportCSV = createServerFn({ method: "POST" })
           .join("\n");
       filename = `revenue-by-category-${data.startDate}-${data.endDate}.csv`;
     } else if (data.type === "quotes") {
-      const q = report.quotes;
+      const q = report.quotes ?? { total: 0, accepted: 0, converted: 0 };
       csv =
         "Metric,Value\nTotal Quotes," +
         q.total +
@@ -3769,6 +4443,7 @@ export const updateAdminProfile = createServerFn({ method: "POST" })
         "SELECT name, email, phone FROM users WHERE user_id=?",
         [u.user_id],
       );
+      if (!old) throw new Error("User not found.");
       if (data.email !== old.email) {
         const dup = await rows(c, "SELECT 1 FROM users WHERE email=? AND user_id!=?", [
           data.email.toLowerCase(),

@@ -3,6 +3,7 @@ import type { Role } from "./data";
 export const STAFF_PERMISSIONS = [
   "dashboard.view",
   "products.view",
+  "products.create",
   "products.update",
   "inventory.view",
   "inventory.adjust",
@@ -27,7 +28,6 @@ export const STAFF_PERMISSIONS = [
 export type StaffPermission = (typeof STAFF_PERMISSIONS)[number];
 
 export const FORBIDDEN_STAFF_PERMISSIONS = [
-  "products.create",
   "products.delete",
   "products.update_price",
   "categories.create",

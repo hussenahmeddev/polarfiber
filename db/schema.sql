@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS quote_requests (
   quoted_amount DECIMAL(12,2) NULL,
   valid_until DATETIME NULL,
   assigned_to INT NULL,
-  status ENUM('New','Reviewing','Pending Approval','Replied','Closed') NOT NULL DEFAULT 'New',
+  status ENUM('New','Reviewing','Pending Approval','Replied','Accepted','Closed') NOT NULL DEFAULT 'New',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL,
   FOREIGN KEY (assigned_to) REFERENCES users(user_id) ON DELETE SET NULL
@@ -238,3 +238,66 @@ INSERT IGNORE INTO app_settings (setting_key, setting_value, description) VALUES
 ('staff_quote_limit', '100000', 'Maximum quote response amount in ETB a staff member can offer without admin approval');
 
 INSERT IGNORE INTO categories (name) VALUES ('Water Tankers'),('Flower Pots'),('Roof Sheets'),('Fiber Pipes');
+
+-- -----------------------------------------------------------------------------
+-- Customer conversation secure-link tables
+-- -----------------------------------------------------------------------------
+
+-- conversation_tokens: secure, expiring tokens for quote & contact message
+CREATE TABLE IF NOT EXISTS conversation_tokens (
+  token               CHAR(64)        PRIMARY KEY,
+  conversation_type   VARCHAR(50)     NOT NULL,
+  conversation_id     INT             NOT NULL,
+  email               VARCHAR(255)    NOT NULL,
+  expires_at          DATETIME        NOT NULL,
+  created_at          TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_conv_token_ref (conversation_type, conversation_id),
+  INDEX idx_conv_tokens_email (email),
+  INDEX idx_conv_tokens_expires (expires_at)
+);
+
+-- quote_replies: conversation thread for quote requests
+CREATE TABLE IF NOT EXISTS quote_replies (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  quote_id    INT             NOT NULL,
+  sender_type ENUM('customer','staff') NOT NULL,
+  sender_name VARCHAR(100)    NOT NULL,
+  reply_text  TEXT            NOT NULL,
+  is_internal TINYINT(1)      NOT NULL DEFAULT 0,
+  created_at  TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (quote_id) REFERENCES quote_requests(quote_id) ON DELETE CASCADE,
+  INDEX idx_quote_replies_quote (quote_id),
+  INDEX idx_quote_replies_created (created_at)
+);
+
+-- contact_message_replies: conversation thread for contact messages
+CREATE TABLE IF NOT EXISTS contact_message_replies (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  message_id  INT             NOT NULL,
+  staff_id    INT             NULL,
+  staff_name  VARCHAR(100)    NOT NULL,
+  reply_text  TEXT            NOT NULL,
+  is_internal TINYINT(1)      NOT NULL DEFAULT 0,
+  read        TINYINT(1)      NOT NULL DEFAULT 0,
+  created_at  TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (message_id) REFERENCES contact_messages(id) ON DELETE CASCADE,
+  INDEX idx_contact_replies_message (message_id),
+  INDEX idx_contact_replies_created (created_at)
+);
+
+-- email_failures: track failed email deliveries for retry
+CREATE TABLE IF NOT EXISTS email_failures (
+  id                  INT AUTO_INCREMENT PRIMARY KEY,
+  recipient           VARCHAR(255)     NOT NULL,
+  subject             VARCHAR(255)     NOT NULL,
+  conversation_type   VARCHAR(50)      NOT NULL,
+  conversation_id     INT              NOT NULL,
+  error               TEXT             NOT NULL,
+  retry_count         INT              NOT NULL DEFAULT 0,
+  next_retry_at       DATETIME         NULL,
+  created_at          TIMESTAMP        DEFAULT CURRENT_TIMESTAMP,
+  last_attempt_at     TIMESTAMP        DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_email_failures_conv (conversation_type, conversation_id),
+  INDEX idx_email_failures_retry (next_retry_at),
+  INDEX idx_email_failures_created (created_at)
+);

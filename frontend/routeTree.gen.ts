@@ -16,10 +16,13 @@ import { Route as CartRouteImport } from './routes/cart'
 import { Route as ContactRouteImport } from './routes/contact'
 import { Route as FaqRouteImport } from './routes/faq'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as OrderConfirmationRouteImport } from './routes/order-confirmation'
+import { Route as OrderTrackingRouteImport } from './routes/order-tracking'
 import { Route as QuoteRouteImport } from './routes/quote'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as TrackOrderRouteImport } from './routes/track-order'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
+import { Route as ConversationTokenRouteImport } from './routes/conversation.$token'
 import { Route as ProductsIndexRouteImport } from './routes/products.index'
 import { Route as ProductsIdRouteImport } from './routes/products.$id'
 
@@ -58,6 +61,16 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OrderConfirmationRoute = OrderConfirmationRouteImport.update({
+  id: '/order-confirmation',
+  path: '/order-confirmation',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OrderTrackingRoute = OrderTrackingRouteImport.update({
+  id: '/order-tracking',
+  path: '/order-tracking',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const QuoteRoute = QuoteRouteImport.update({
   id: '/quote',
   path: '/quote',
@@ -78,6 +91,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminRoute,
 } as any)
+const ConversationTokenRoute = ConversationTokenRouteImport.update({
+  id: '/conversation/$token',
+  path: '/conversation/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProductsIndexRoute = ProductsIndexRouteImport.update({
   id: '/products/',
   path: '/products/',
@@ -97,9 +115,12 @@ export interface FileRoutesByFullPath {
   '/contact': typeof ContactRoute
   '/faq': typeof FaqRoute
   '/login': typeof LoginRoute
+  '/order-confirmation': typeof OrderConfirmationRoute
+  '/order-tracking': typeof OrderTrackingRoute
   '/quote': typeof QuoteRoute
   '/services': typeof ServicesRoute
   '/track-order': typeof TrackOrderRoute
+  '/conversation/$token': typeof ConversationTokenRoute
   '/products/$id': typeof ProductsIdRoute
   '/admin/': typeof AdminIndexRoute
   '/products/': typeof ProductsIndexRoute
@@ -111,9 +132,12 @@ export interface FileRoutesByTo {
   '/contact': typeof ContactRoute
   '/faq': typeof FaqRoute
   '/login': typeof LoginRoute
+  '/order-confirmation': typeof OrderConfirmationRoute
+  '/order-tracking': typeof OrderTrackingRoute
   '/quote': typeof QuoteRoute
   '/services': typeof ServicesRoute
   '/track-order': typeof TrackOrderRoute
+  '/conversation/$token': typeof ConversationTokenRoute
   '/products/$id': typeof ProductsIdRoute
   '/admin': typeof AdminIndexRoute
   '/products': typeof ProductsIndexRoute
@@ -127,9 +151,12 @@ export interface FileRoutesById {
   '/contact': typeof ContactRoute
   '/faq': typeof FaqRoute
   '/login': typeof LoginRoute
+  '/order-confirmation': typeof OrderConfirmationRoute
+  '/order-tracking': typeof OrderTrackingRoute
   '/quote': typeof QuoteRoute
   '/services': typeof ServicesRoute
   '/track-order': typeof TrackOrderRoute
+  '/conversation/$token': typeof ConversationTokenRoute
   '/products/$id': typeof ProductsIdRoute
   '/admin/': typeof AdminIndexRoute
   '/products/': typeof ProductsIndexRoute
@@ -144,9 +171,12 @@ export interface FileRouteTypes {
     | '/contact'
     | '/faq'
     | '/login'
+    | '/order-confirmation'
+    | '/order-tracking'
     | '/quote'
     | '/services'
     | '/track-order'
+    | '/conversation/$token'
     | '/products/$id'
     | '/admin/'
     | '/products/'
@@ -158,9 +188,12 @@ export interface FileRouteTypes {
     | '/contact'
     | '/faq'
     | '/login'
+    | '/order-confirmation'
+    | '/order-tracking'
     | '/quote'
     | '/services'
     | '/track-order'
+    | '/conversation/$token'
     | '/products/$id'
     | '/admin'
     | '/products'
@@ -173,9 +206,12 @@ export interface FileRouteTypes {
     | '/contact'
     | '/faq'
     | '/login'
+    | '/order-confirmation'
+    | '/order-tracking'
     | '/quote'
     | '/services'
     | '/track-order'
+    | '/conversation/$token'
     | '/products/$id'
     | '/admin/'
     | '/products/'
@@ -189,9 +225,12 @@ export interface RootRouteChildren {
   ContactRoute: typeof ContactRoute
   FaqRoute: typeof FaqRoute
   LoginRoute: typeof LoginRoute
+  OrderConfirmationRoute: typeof OrderConfirmationRoute
+  OrderTrackingRoute: typeof OrderTrackingRoute
   QuoteRoute: typeof QuoteRoute
   ServicesRoute: typeof ServicesRoute
   TrackOrderRoute: typeof TrackOrderRoute
+  ConversationTokenRoute: typeof ConversationTokenRoute
   ProductsIdRoute: typeof ProductsIdRoute
   ProductsIndexRoute: typeof ProductsIndexRoute
 }
@@ -247,6 +286,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/order-confirmation': {
+      id: '/order-confirmation'
+      path: '/order-confirmation'
+      fullPath: '/order-confirmation'
+      preLoaderRoute: typeof OrderConfirmationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/order-tracking': {
+      id: '/order-tracking'
+      path: '/order-tracking'
+      fullPath: '/order-tracking'
+      preLoaderRoute: typeof OrderTrackingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/quote': {
       id: '/quote'
       path: '/quote'
@@ -274,6 +327,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/conversation/$token': {
+      id: '/conversation/$token'
+      path: '/conversation/$token'
+      fullPath: '/conversation/$token'
+      preLoaderRoute: typeof ConversationTokenRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/products/': {
       id: '/products/'
@@ -310,9 +370,12 @@ const rootRouteChildren: RootRouteChildren = {
   ContactRoute: ContactRoute,
   FaqRoute: FaqRoute,
   LoginRoute: LoginRoute,
+  OrderConfirmationRoute: OrderConfirmationRoute,
+  OrderTrackingRoute: OrderTrackingRoute,
   QuoteRoute: QuoteRoute,
   ServicesRoute: ServicesRoute,
   TrackOrderRoute: TrackOrderRoute,
+  ConversationTokenRoute: ConversationTokenRoute,
   ProductsIdRoute: ProductsIdRoute,
   ProductsIndexRoute: ProductsIndexRoute,
 }

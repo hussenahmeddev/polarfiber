@@ -103,7 +103,7 @@ describe("Phase 4: Staff vs Admin Dashboard Filtering & Actions", () => {
   });
 
   describe("Products Catalog & Dialog Controls", () => {
-    it("hides Add Product and Delete Product buttons for staff", () => {
+    it("allows Add Product but hides Delete Product button for staff", () => {
       vi.spyOn(storeModule, "useStore").mockReturnValue({
         user: staffUser,
         refreshUser: vi.fn(),
@@ -121,7 +121,7 @@ describe("Phase 4: Staff vs Admin Dashboard Filtering & Actions", () => {
         </div>,
       );
 
-      expect(screen.queryByTestId("add-product-btn")).toBeNull();
+      expect(screen.getByTestId("add-product-btn")).toBeDefined();
       expect(screen.queryByTestId("delete-product-btn")).toBeNull();
       expect(screen.getByTestId("edit-product-btn")).toBeDefined();
     });
