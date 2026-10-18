@@ -4216,7 +4216,14 @@ export const createSupportTicket = createServerFn({ method: "POST" })
     z
       .object({
         customer_name: z.string().trim().min(1).max(100),
-        customer_email: z.string().trim().email().max(255),
+        customer_email: z
+          .union([
+            z.string().trim().email().max(255),
+            z.literal(""),
+            z.null(),
+            z.undefined(),
+          ])
+          .optional(),
         subject: z.string().trim().min(1).max(200),
         category: z.enum([
           "Technical Specs",
@@ -4234,9 +4241,12 @@ export const createSupportTicket = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const u = await requirePermission("support.view");
     return withDb(async (c) => {
-      const [usr] = await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
-        data.customer_email.toLowerCase(),
-      ]);
+      const email = (data.customer_email ?? "").trim();
+      const [usr] = email
+        ? await rows<{ user_id: number }>(c, "SELECT user_id FROM users WHERE email=?", [
+            email.toLowerCase(),
+          ])
+        : [undefined];
       const [r] = await c.execute(
         `INSERT INTO support_tickets
            (ticket_code, user_id, customer_name, customer_email, subject, category, priority, assigned_to)
@@ -4244,7 +4254,7 @@ export const createSupportTicket = createServerFn({ method: "POST" })
         [
           usr?.user_id ?? null,
           data.customer_name,
-          data.customer_email,
+          email,
           data.subject,
           data.category,
           data.priority,
@@ -4252,10 +4262,10 @@ export const createSupportTicket = createServerFn({ method: "POST" })
         ],
       );
       const ticketId = (r as { insertId: number }).insertId;
-      if (data.message) {
+      if (data.message && data.message.trim()) {
         await c.execute(
           "INSERT INTO ticket_replies (ticket_id, user_id, message, is_internal) VALUES (?,?,?,0)",
-          [ticketId, u.user_id, data.message],
+          [ticketId, u.user_id, data.message.trim()],
         );
       }
       await logAction(null, "CREATE_SUPPORT_TICKET", "support_ticket", ticketId, null, data);

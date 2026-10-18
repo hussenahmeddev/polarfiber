@@ -432,14 +432,24 @@ export function AdminDashboard() {
   const [newTicketDialogOpen, setNewTicketDialogOpen] = React.useState(false);
   const [newTicketData, setNewTicketData] = React.useState<{
     customer: string;
+    customer_email: string;
     subject: string;
-    category: "Technical Specs" | "Installation" | "Warranty" | "Custom Fabrication";
+    category:
+      | "Technical Specs"
+      | "Installation"
+      | "Warranty"
+      | "Custom Fabrication"
+      | "General"
+      | "Billing";
     priority: "Urgent" | "High" | "Normal" | "Low";
+    message: string;
   }>({
     customer: "",
+    customer_email: "",
     subject: "",
     category: "Technical Specs",
     priority: "Normal",
+    message: "",
   });
 
   // Audit Logs State
@@ -524,14 +534,6 @@ export function AdminDashboard() {
   // Support — selected ticket + reply
   const [selectedTicket, setSelectedTicket] = React.useState<any | null>(null);
   const [ticketReplyInternal, setTicketReplyInternal] = React.useState(false);
-  const [newTicketData2, setNewTicketData2] = React.useState({
-    customer_name: "",
-    customer_email: "",
-    subject: "",
-    category: "General",
-    priority: "Normal",
-    message: "",
-  });
 
   // Audit logs — filters
   const [auditFilters, setAuditFilters] = React.useState({
@@ -3765,7 +3767,12 @@ export function AdminDashboard() {
                     >
                       <td className="px-5 py-4 font-bold text-primary">{t.id}</td>
                       <td className="px-5 py-4 font-semibold text-foreground">
-                        {t.customer_name ?? t.customer}
+                        <div>{t.customer_name ?? t.customer}</div>
+                        {t.customer_email ? (
+                          <div className="text-xs text-muted-foreground font-normal">
+                            {t.customer_email}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-5 py-4 text-foreground">{t.subject}</td>
                       <td className="px-5 py-4 text-xs text-muted-foreground">{t.category}</td>
@@ -5258,15 +5265,26 @@ export function AdminDashboard() {
             <h3 className="font-bold text-lg text-foreground">Create Support Ticket</h3>
             <div className="space-y-3">
               <div>
-                <Label className="text-xs">Client Name</Label>
+                <Label className="text-xs">Client Name *</Label>
                 <Input
                   value={newTicketData.customer}
                   onChange={(e) => setNewTicketData({ ...newTicketData, customer: e.target.value })}
-                  placeholder="e.g. BGI Ethiopia"
+                  placeholder="e.g. Heineken Breweries SC"
                 />
               </div>
               <div>
-                <Label className="text-xs">Issue Subject</Label>
+                <Label className="text-xs">Client Email (Optional)</Label>
+                <Input
+                  type="email"
+                  value={newTicketData.customer_email}
+                  onChange={(e) =>
+                    setNewTicketData({ ...newTicketData, customer_email: e.target.value })
+                  }
+                  placeholder="e.g. contact@client.com"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Issue Subject *</Label>
                 <Input
                   value={newTicketData.subject}
                   onChange={(e) => setNewTicketData({ ...newTicketData, subject: e.target.value })}
@@ -5280,8 +5298,7 @@ export function AdminDashboard() {
                   onChange={(e) =>
                     setNewTicketData({
                       ...newTicketData,
-                      category: e.target.value as
-                        "Technical Specs" | "Installation" | "Warranty" | "Custom Fabrication",
+                      category: e.target.value as any,
                     })
                   }
                   className="w-full h-10 rounded-lg border border-border px-3 text-sm"
@@ -5290,6 +5307,8 @@ export function AdminDashboard() {
                   <option value="Installation">Installation</option>
                   <option value="Warranty">Warranty</option>
                   <option value="Custom Fabrication">Custom Fabrication</option>
+                  <option value="General">General</option>
+                  <option value="Billing">Billing</option>
                 </select>
               </div>
               <div>
@@ -5310,6 +5329,16 @@ export function AdminDashboard() {
                   <option value="Low">Low</option>
                 </select>
               </div>
+              <div>
+                <Label className="text-xs">Initial Message / Notes (Optional)</Label>
+                <textarea
+                  value={newTicketData.message}
+                  onChange={(e) => setNewTicketData({ ...newTicketData, message: e.target.value })}
+                  placeholder="Describe the issue or initial details..."
+                  rows={3}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setNewTicketDialogOpen(false)}>
@@ -5317,32 +5346,48 @@ export function AdminDashboard() {
               </Button>
               <Button
                 onClick={async () => {
-                  if (!newTicketData.customer || !newTicketData.subject) {
+                  if (!newTicketData.customer.trim() || !newTicketData.subject.trim()) {
                     toast.error("Please fill in client name and subject.");
+                    return;
+                  }
+                  const emailTrimmed = newTicketData.customer_email.trim();
+                  if (emailTrimmed && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrimmed)) {
+                    toast.error("Please enter a valid email address or leave it blank.");
                     return;
                   }
                   try {
                     await mutateCreateSupportTicket({
                       data: {
-                        customer_name: newTicketData.customer,
-                        customer_email: "",
-                        subject: newTicketData.subject,
+                        customer_name: newTicketData.customer.trim(),
+                        customer_email: emailTrimmed,
+                        subject: newTicketData.subject.trim(),
                         category: newTicketData.category,
                         priority: newTicketData.priority,
-                        message: "",
+                        message: newTicketData.message.trim(),
                       },
                     } as any);
                     toast.success("Support ticket created");
                     setNewTicketDialogOpen(false);
                     setNewTicketData({
                       customer: "",
+                      customer_email: "",
                       subject: "",
                       category: "Technical Specs",
                       priority: "Normal",
+                      message: "",
                     });
                     supportTicketsQuery.refetch();
                   } catch (e: any) {
-                    toast.error(e.message);
+                    let errMsg = e?.message || "Failed to create support ticket";
+                    try {
+                      const parsed = JSON.parse(errMsg);
+                      if (Array.isArray(parsed) && parsed[0]?.message) {
+                        errMsg = parsed[0].message;
+                      }
+                    } catch {
+                      // ignore parse error
+                    }
+                    toast.error(errMsg);
                   }
                 }}
                 className="bg-primary hover:bg-primary/90 text-primary-foreground"
