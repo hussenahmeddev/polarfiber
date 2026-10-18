@@ -358,10 +358,15 @@ export const refreshTokens = createServerFn({ method: "POST" }).handler(async ()
 // ---------- orders & quotes ----------
 async function loadOrders(where: string, params: unknown[]): Promise<Order[]> {
   return withDb(async (c) => {
+    const hasOrder = where.toUpperCase().includes("ORDER BY");
+    const sql = `SELECT o.order_id,o.user_id,o.total,o.status,o.address,o.is_paid,o.payment_method,o.internal_notes,DATE(o.created_at) created_at,COALESCE(u.name, o.customer_name, 'Guest Customer') customer
+        FROM orders o
+        LEFT JOIN users u ON u.user_id=o.user_id
+        LEFT JOIN order_access oa ON oa.order_id=o.order_id
+        ${where} ${hasOrder ? "" : "ORDER BY o.order_id DESC"}`;
     const os = await rows<Omit<Order, "items"> & { customer: string }>(
       c,
-      `SELECT o.order_id,o.user_id,o.total,o.status,o.address,o.is_paid,o.payment_method,o.internal_notes,DATE(o.created_at) created_at,u.name customer
-        FROM orders o LEFT JOIN users u ON u.user_id=o.user_id ${where} ORDER BY o.order_id DESC`,
+      sql,
       params,
     );
     if (!os.length) return [];
@@ -1804,33 +1809,231 @@ export const getOrdersPage = createServerFn({ method: "POST" })
     });
   });
 
+export interface CustomerSummary {
+  id: string;
+  user_id: number | null;
+  name: string;
+  email: string;
+  phone: string;
+  role: "customer" | "admin" | "staff" | "guest";
+  is_active: number;
+  orders_count: number;
+  total_spent: number;
+  created_at: string;
+  is_guest: boolean;
+}
+
+export async function loadUnifiedCustomers(c: mysql.Connection): Promise<CustomerSummary[]> {
+  // 1. Registered users
+  const registeredUsers = await rows<{
+    user_id: number;
+    name: string;
+    email: string;
+    phone: string | null;
+    role: "customer" | "admin" | "staff";
+    is_active: number;
+    created_at: string;
+  }>(
+    c,
+    `SELECT u.user_id, u.name, u.email, u.phone,
+            COALESCE((SELECT r.role FROM user_roles r WHERE r.user_id=u.user_id LIMIT 1), u.role) as role,
+            u.is_active,
+            DATE(u.created_at) as created_at
+     FROM users u`,
+  );
+
+  // 2. All orders with guest access email and contact details
+  const orders = await rows<{
+    order_id: number;
+    user_id: number | null;
+    email: string | null;
+    customer_name: string | null;
+    customer_phone: string | null;
+    total: number;
+    status: string;
+    created_at: string;
+  }>(
+    c,
+    `SELECT o.order_id, o.user_id, oa.email, o.customer_name, o.customer_phone, o.total, o.status, DATE(o.created_at) as created_at
+     FROM orders o
+     LEFT JOIN order_access oa ON oa.order_id = o.order_id`,
+  );
+
+  // 3. All quote requests
+  const quotes = await rows<{
+    quote_id: number;
+    user_id: number | null;
+    name: string;
+    email: string;
+    created_at: string;
+  }>(
+    c,
+    `SELECT quote_id, user_id, name, email, DATE(created_at) as created_at
+     FROM quote_requests`,
+  );
+
+  // 4. All contact messages
+  const messages = await rows<{
+    id: number;
+    name: string;
+    email: string;
+    phone: string | null;
+    created_at: string;
+  }>(
+    c,
+    `SELECT id, name, email, phone, DATE(created_at) as created_at
+     FROM contact_messages`,
+  );
+
+  // 5. All support tickets
+  const tickets = await rows<{
+    id: number;
+    user_id: number | null;
+    customer_name: string;
+    customer_email: string;
+    created_at: string;
+  }>(
+    c,
+    `SELECT id, user_id, customer_name, customer_email, DATE(created_at) as created_at
+     FROM support_tickets`,
+  );
+
+  const customerMap = new Map<string, CustomerSummary>();
+  const userToEmail = new Map<number, string>();
+
+  // Seed with registered users
+  for (const u of registeredUsers) {
+    const key = (u.email || "").trim().toLowerCase();
+    if (!key) continue;
+    userToEmail.set(u.user_id, key);
+    customerMap.set(key, {
+      id: String(u.user_id),
+      user_id: u.user_id,
+      name: u.name || "Unnamed User",
+      email: u.email,
+      phone: u.phone || "",
+      role: u.role || "customer",
+      is_active: u.is_active ?? 1,
+      orders_count: 0,
+      total_spent: 0,
+      created_at: u.created_at,
+      is_guest: false,
+    });
+  }
+
+  // Helper to ensure customer exists in map
+  const getOrCreate = (
+    emailRaw: string | null | undefined,
+    fallbackName?: string | null,
+    fallbackPhone?: string | null,
+    fallbackDate?: string | null,
+    userId?: number | null,
+  ): CustomerSummary | null => {
+    let key = (emailRaw || "").trim().toLowerCase();
+    if (!key && userId && userToEmail.has(userId)) {
+      key = userToEmail.get(userId)!;
+    }
+    if (!key) return null;
+
+    let cust = customerMap.get(key);
+    if (!cust) {
+      cust = {
+        id: `guest-${key}`,
+        user_id: userId ?? null,
+        name: fallbackName?.trim() || "Guest Customer",
+        email: emailRaw?.trim() || key,
+        phone: fallbackPhone?.trim() || "",
+        role: "guest",
+        is_active: 1,
+        orders_count: 0,
+        total_spent: 0,
+        created_at: fallbackDate || new Date().toISOString().slice(0, 10),
+        is_guest: true,
+      };
+      customerMap.set(key, cust);
+    } else {
+      if (fallbackPhone && !cust.phone) cust.phone = fallbackPhone.trim();
+      if (cust.is_guest && (!cust.name || cust.name === "Guest Customer") && fallbackName?.trim()) {
+        cust.name = fallbackName.trim();
+      }
+      if (fallbackDate && (!cust.created_at || fallbackDate < cust.created_at)) {
+        cust.created_at = fallbackDate;
+      }
+    }
+    return cust;
+  };
+
+  // Process orders
+  for (const o of orders) {
+    let email = o.email;
+    if (!email && o.user_id && userToEmail.has(o.user_id)) {
+      email = userToEmail.get(o.user_id);
+    }
+    const cust = getOrCreate(email, o.customer_name, o.customer_phone, o.created_at, o.user_id);
+    if (cust) {
+      cust.orders_count += 1;
+      // Calculate spending from eligible completed orders using defined business rules (status = 'Delivered')
+      if (o.status === "Delivered") {
+        cust.total_spent += Number(o.total || 0);
+      }
+      if (o.customer_name && cust.is_guest && cust.name === "Guest Customer") {
+        cust.name = o.customer_name;
+      }
+      if (o.customer_phone && !cust.phone) {
+        cust.phone = o.customer_phone;
+      }
+    }
+  }
+
+  // Process quotes
+  for (const q of quotes) {
+    let email = q.email;
+    if (!email && q.user_id && userToEmail.has(q.user_id)) {
+      email = userToEmail.get(q.user_id);
+    }
+    const cust = getOrCreate(email, q.name, null, q.created_at, q.user_id);
+    if (cust && cust.is_guest && q.name && cust.name === "Guest Customer") {
+      cust.name = q.name;
+    }
+  }
+
+  // Process messages
+  for (const m of messages) {
+    const cust = getOrCreate(m.email, m.name, m.phone, m.created_at);
+    if (cust) {
+      if (cust.is_guest && m.name && cust.name === "Guest Customer") cust.name = m.name;
+      if (m.phone && !cust.phone) cust.phone = m.phone;
+    }
+  }
+
+  // Process support tickets
+  for (const t of tickets) {
+    let email = t.customer_email;
+    if (!email && t.user_id && userToEmail.has(t.user_id)) {
+      email = userToEmail.get(t.user_id);
+    }
+    const cust = getOrCreate(email, t.customer_name, null, t.created_at, t.user_id);
+    if (cust && cust.is_guest && t.customer_name && cust.name === "Guest Customer") {
+      cust.name = t.customer_name;
+    }
+  }
+
+  const list = Array.from(customerMap.values());
+  // Sort: highest completed spending first, then order count, then newest
+  list.sort(
+    (a, b) =>
+      b.total_spent - a.total_spent ||
+      b.orders_count - a.orders_count ||
+      b.created_at.localeCompare(a.created_at),
+  );
+  return list;
+}
+
 export const getCustomers = createServerFn({ method: "GET" }).handler(async () => {
   const u = await requirePermission("customers.view");
   const isStaff = u.role === "staff";
   return withDb(async (c) => {
-    const list = await rows<{
-      user_id: number;
-      name: string;
-      email: string;
-      phone: string;
-      role: "customer" | "admin" | "staff";
-      orders_count: number;
-      total_spent: number;
-      created_at: string;
-    }>(
-      c,
-      `SELECT u.user_id, u.name, u.email, u.phone,
-              CASE
-                WHEN EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='admin') THEN 'admin'
-                WHEN EXISTS(SELECT 1 FROM user_roles r WHERE r.user_id=u.user_id AND r.role='staff') THEN 'staff'
-                ELSE 'customer'
-              END as role,
-              (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.user_id) as orders_count,
-              COALESCE((SELECT SUM(total) FROM orders o WHERE o.user_id=u.user_id AND o.status != 'Cancelled'), 0) as total_spent,
-              DATE(u.created_at) as created_at
-       FROM users u
-       ORDER BY total_spent DESC, orders_count DESC`,
-    );
+    const list = await loadUnifiedCustomers(c);
     if (isStaff) {
       return list.map((cust) => ({
         ...cust,
@@ -4065,35 +4268,109 @@ export const blockCustomer = createServerFn({ method: "POST" })
   });
 
 export const getCustomerDetail = createServerFn({ method: "POST" })
-  .validator((d) => z.object({ user_id: z.number().int() }).parse(d))
+  .validator((d) =>
+    z
+      .object({
+        user_id: z.number().int().optional().nullable(),
+        email: z.string().trim().optional().nullable(),
+      })
+      .parse(d),
+  )
   .handler(async ({ data }) => {
     const actor = await requirePermission("customers.view");
     const isStaff = actor.role === "staff";
     return withDb(async (c) => {
-      const [u] = await rows<{
-        user_id: number;
+      let u: {
+        user_id: number | null;
         name: string;
         email: string;
         phone: string;
         role: string;
         is_active: number;
         created_at: string;
-      }>(
-        c,
-        "SELECT user_id,name,email,phone,role,is_active,DATE(created_at) created_at FROM users WHERE user_id=?",
-        [data.user_id],
-      );
-      if (!u) throw new Error("Customer not found.");
-      const [stats] = await rows<{ orders_count: number; total_spent: number }>(
-        c,
-        `SELECT COUNT(*) orders_count,
-                COALESCE(SUM(CASE WHEN status!='Cancelled' THEN total ELSE 0 END),0) total_spent
-         FROM orders WHERE user_id=?`,
-        [data.user_id],
-      );
-      const recentOrders = await loadOrders("WHERE o.user_id=? ORDER BY o.order_id DESC LIMIT 10", [
-        data.user_id,
-      ]);
+        is_guest: boolean;
+      } | null = null;
+
+      if (data.user_id) {
+        const [usr] = await rows<{
+          user_id: number;
+          name: string;
+          email: string;
+          phone: string | null;
+          role: string;
+          is_active: number;
+          created_at: string;
+        }>(
+          c,
+          `SELECT u.user_id, u.name, u.email, COALESCE(u.phone, '') as phone,
+                  COALESCE((SELECT r.role FROM user_roles r WHERE r.user_id=u.user_id LIMIT 1), u.role) as role,
+                  u.is_active, DATE(u.created_at) as created_at
+           FROM users u WHERE u.user_id=?`,
+          [data.user_id],
+        );
+        if (usr) {
+          u = { ...usr, is_guest: false };
+        }
+      }
+
+      if (!u && data.email) {
+        const [usr] = await rows<{
+          user_id: number;
+          name: string;
+          email: string;
+          phone: string | null;
+          role: string;
+          is_active: number;
+          created_at: string;
+        }>(
+          c,
+          `SELECT u.user_id, u.name, u.email, COALESCE(u.phone, '') as phone,
+                  COALESCE((SELECT r.role FROM user_roles r WHERE r.user_id=u.user_id LIMIT 1), u.role) as role,
+                  u.is_active, DATE(u.created_at) as created_at
+           FROM users u WHERE LOWER(u.email)=LOWER(?)`,
+          [data.email],
+        );
+        if (usr) {
+          u = { ...usr, is_guest: false };
+        }
+      }
+
+      const email = (u?.email || data.email || "").trim().toLowerCase();
+      const userId = u?.user_id ?? data.user_id ?? null;
+
+      if (!u) {
+        if (!email) throw new Error("Customer identifier required.");
+        // Synthesize guest customer details from unified customer aggregator
+        const allCusts = await loadUnifiedCustomers(c);
+        const match = allCusts.find((x) => x.email.toLowerCase() === email);
+        if (!match) throw new Error("Customer record not found.");
+        u = {
+          user_id: match.user_id,
+          name: match.name,
+          email: match.email,
+          phone: match.phone,
+          role: "guest",
+          is_active: 1,
+          created_at: match.created_at,
+          is_guest: true,
+        };
+      }
+
+      // 1. Order History
+      const orderWhere = userId
+        ? "WHERE (o.user_id=? OR LOWER(oa.email)=?) ORDER BY o.order_id DESC LIMIT 25"
+        : "WHERE LOWER(oa.email)=? ORDER BY o.order_id DESC LIMIT 25";
+      const orderParams = userId ? [userId, email] : [email];
+      const recentOrders = await loadOrders(orderWhere, orderParams);
+
+      const completedOrders = recentOrders.filter((o) => o.status === "Delivered");
+      const totalSpent = completedOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+
+      // 2. Quote History
+      const quoteWhere = userId
+        ? "WHERE (qr.user_id=? OR LOWER(qr.email)=?) ORDER BY qr.quote_id DESC LIMIT 20"
+        : "WHERE LOWER(qr.email)=? ORDER BY qr.quote_id DESC LIMIT 20";
+      const quoteParams = userId ? [userId, email] : [email];
       const recentQuotes = await rows<{
         quote_id: number;
         subject: string;
@@ -4102,23 +4379,69 @@ export const getCustomerDetail = createServerFn({ method: "POST" })
         created_at: string;
       }>(
         c,
-        "SELECT quote_id, subject, status, quoted_amount, DATE(created_at) created_at FROM quote_requests WHERE user_id=? OR email=? ORDER BY quote_id DESC LIMIT 10",
-        [data.user_id, u.email],
+        `SELECT qr.quote_id, qr.subject, qr.status, qr.quoted_amount, DATE(qr.created_at) created_at
+         FROM quote_requests qr ${quoteWhere}`,
+        quoteParams,
       );
+
+      // 3. Contact Messages
       const recentMessages = await rows<{
         id: number;
         subject: string;
+        message: string;
         is_read: number;
         created_at: string;
       }>(
         c,
-        "SELECT id, subject, is_read, DATE(created_at) created_at FROM contact_messages WHERE email=? ORDER BY id DESC LIMIT 10",
-        [u.email],
+        `SELECT id, subject, message, is_read, DATE(created_at) created_at
+         FROM contact_messages WHERE LOWER(email)=? ORDER BY id DESC LIMIT 20`,
+        [email],
       );
+
+      // 4. Support Tickets
+      const ticketWhere = userId
+        ? "WHERE (st.user_id=? OR LOWER(st.customer_email)=?) ORDER BY st.id DESC LIMIT 20"
+        : "WHERE LOWER(st.customer_email)=? ORDER BY st.id DESC LIMIT 20";
+      const ticketParams = userId ? [userId, email] : [email];
+      const recentTickets = await rows<{
+        id: number;
+        ticket_code: string;
+        subject: string;
+        category: string;
+        priority: string;
+        status: string;
+        created_at: string;
+      }>(
+        c,
+        `SELECT id, ticket_code, subject, category, priority, status, DATE(created_at) created_at
+         FROM support_tickets st ${ticketWhere}`,
+        ticketParams,
+      );
+
+      // 5. Order Messages (Communication history on orders)
+      const recentOrderMessages =
+        recentOrders.length > 0
+          ? await rows<{
+              id: number;
+              order_id: number;
+              sender_type: string;
+              sender_name: string;
+              body: string;
+              created_at: string;
+            }>(
+              c,
+              `SELECT id, order_id, sender_type, sender_name, body, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') as created_at
+               FROM order_messages
+               WHERE order_id IN (${recentOrders.map(() => "?").join(",")}) AND kind='message'
+               ORDER BY id DESC LIMIT 20`,
+              recentOrders.map((o) => o.order_id),
+            )
+          : [];
+
       return {
         ...u,
-        orders_count: Number(stats?.orders_count ?? 0),
-        total_spent: isStaff ? 0 : Number(stats?.total_spent ?? 0),
+        orders_count: recentOrders.length,
+        total_spent: isStaff ? 0 : totalSpent,
         recent_orders: isStaff
           ? recentOrders.map((o) => ({
               ...o,
@@ -4131,39 +4454,22 @@ export const getCustomerDetail = createServerFn({ method: "POST" })
           quoted_amount: isStaff ? 0 : q.quoted_amount,
         })),
         recent_messages: recentMessages,
+        recent_tickets: recentTickets,
+        recent_order_messages: recentOrderMessages,
       };
     });
   });
 
 export const exportCustomersCSV = createServerFn({ method: "GET" }).handler(async () => {
   const actor = await requirePermission("customers.export");
-  const data = await withDb((c) =>
-    rows<{
-      user_id: number;
-      name: string;
-      email: string;
-      phone: string;
-      role: string;
-      is_active: number;
-      orders_count: number;
-      total_spent: number;
-      created_at: string;
-    }>(
-      c,
-      `SELECT u.user_id, u.name, u.email, COALESCE(u.phone,'') phone,
-              COALESCE((SELECT r.role FROM user_roles r WHERE r.user_id=u.user_id LIMIT 1), u.role) role,
-              u.is_active,
-              (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.user_id) orders_count,
-              COALESCE((SELECT SUM(total) FROM orders o WHERE o.user_id=u.user_id AND o.status!='Cancelled'),0) total_spent,
-              DATE(u.created_at) created_at
-       FROM users u ORDER BY u.user_id`,
-    ),
-  );
-  const header = "ID,Name,Email,Phone,Role,Active,Orders,Total Spent,Joined\n";
+  const data = await withDb(async (c) => {
+    return loadUnifiedCustomers(c);
+  });
+  const header = "ID,Name,Email,Phone,Role,Type,Active,Orders Placed,Total Spent (ETB),Joined / First Seen\n";
   const csvRows = data
     .map(
       (r) =>
-        `${r.user_id},"${r.name.replace(/"/g, '""')}","${r.email}","${r.phone}","${r.role}",${r.is_active},${r.orders_count},${r.total_spent},"${r.created_at}"`,
+        `"${r.id}","${(r.name || "").replace(/"/g, '""')}","${r.email}","${r.phone || ""}","${r.role}","${r.is_guest ? "Guest" : "Registered"}",${r.is_active},${r.orders_count},${r.total_spent},"${r.created_at}"`,
     )
     .join("\n");
   await logAction(null, "EXPORT_CUSTOMERS_CSV", "customers", "csv", null, {

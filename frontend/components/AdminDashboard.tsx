@@ -528,7 +528,10 @@ export function AdminDashboard() {
   const [savingQuoteItems, setSavingQuoteItems] = React.useState(false);
 
   // Customer detail
-  const [customerDetailUserId, setCustomerDetailUserId] = React.useState<number | null>(null);
+  const [selectedCustomerTarget, setSelectedCustomerTarget] = React.useState<{
+    user_id?: number | null;
+    email?: string;
+  } | null>(null);
   const [customerDetailOpen, setCustomerDetailOpen] = React.useState(false);
 
   // Support — selected ticket + reply
@@ -721,9 +724,21 @@ export function AdminDashboard() {
   });
 
   const customerDetailQuery = useQuery({
-    queryKey: ["customer-detail", customerDetailUserId],
-    queryFn: () => fetchCustomerDetail({ data: { user_id: customerDetailUserId! } } as any),
-    enabled: !!customerDetailUserId,
+    queryKey: [
+      "customer-detail",
+      selectedCustomerTarget?.user_id,
+      selectedCustomerTarget?.email,
+    ],
+    queryFn: () =>
+      fetchCustomerDetail({
+        data: {
+          user_id: selectedCustomerTarget?.user_id ?? null,
+          email: selectedCustomerTarget?.email ?? null,
+        },
+      } as any),
+    enabled:
+      !!selectedCustomerTarget &&
+      (selectedCustomerTarget.user_id != null || !!selectedCustomerTarget.email),
   });
 
   const stockMovementsQuery = useQuery({
@@ -1116,11 +1131,14 @@ export function AdminDashboard() {
   });
 
   // Filtering customers
-  const filteredCustomers = allCustomers.filter((c) => {
+  const filteredCustomers = allCustomers.filter((c: any) => {
+    const query = customerSearch.toLowerCase().trim();
+    if (!query) return true;
     return (
-      c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
-      c.email.toLowerCase().includes(customerSearch.toLowerCase()) ||
-      c.phone.includes(customerSearch)
+      (c.name || "").toLowerCase().includes(query) ||
+      (c.email || "").toLowerCase().includes(query) ||
+      (c.phone || "").toLowerCase().includes(query) ||
+      (c.role || "").toLowerCase().includes(query)
     );
   });
 
@@ -3104,10 +3122,12 @@ export function AdminDashboard() {
                     <th className="px-5 py-4">Customer Name</th>
                     <th className="px-5 py-4">Email</th>
                     <th className="px-5 py-4">Phone</th>
-                    <th className="px-5 py-4">Role</th>
+                    <th className="px-5 py-4">Role / Type</th>
                     <th className="px-5 py-4">Orders Placed</th>
-                    {hasPermission("revenue.view") && <th className="px-5 py-4">Lifetime Spend</th>}
-                    <th className="px-5 py-4">Joined</th>
+                    {hasPermission("revenue.view") && (
+                      <th className="px-5 py-4">Lifetime Spend</th>
+                    )}
+                    <th className="px-5 py-4">Joined / First Seen</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -3117,74 +3137,93 @@ export function AdminDashboard() {
                         colSpan={hasPermission("revenue.view") ? 7 : 6}
                         className="py-12 text-center text-muted-foreground/60 text-sm"
                       >
-                        No customer accounts found.
+                        No customers found matching your criteria.
                       </td>
                     </tr>
                   ) : (
-                    filteredCustomers.map((c) => (
+                    filteredCustomers.map((c: any) => (
                       <tr
-                        key={c.user_id}
+                        key={c.id || c.email || c.user_id}
                         className="hover:bg-muted/50/60 transition-colors cursor-pointer"
                         onClick={() => {
-                          setCustomerDetailUserId(c.user_id);
+                          setSelectedCustomerTarget({ user_id: c.user_id, email: c.email });
                           setCustomerDetailOpen(true);
                         }}
                       >
-                        <td className="px-5 py-4 font-semibold text-foreground">{c.name}</td>
+                        <td className="px-5 py-4 font-semibold text-foreground">
+                          <div className="flex items-center gap-2">
+                            <span>{c.name}</span>
+                            {c.is_guest && (
+                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border">
+                                Guest
+                              </span>
+                            )}
+                          </div>
+                        </td>
                         <td className="px-5 py-4 text-muted-foreground">{c.email}</td>
                         <td className="px-5 py-4 text-muted-foreground">{c.phone || "—"}</td>
                         <td className="px-5 py-4">
-                          <Can
-                            permission="team.update"
-                            fallback={
-                              <span
-                                className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
+                          {c.is_guest ? (
+                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-sky-500/15 text-sky-600 dark:text-sky-400">
+                              Guest
+                            </span>
+                          ) : (
+                            <Can
+                              permission="team.update"
+                              fallback={
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${
+                                    c.role === "admin"
+                                      ? "bg-primary/15 text-primary"
+                                      : c.role === "staff"
+                                        ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                                        : "bg-muted text-muted-foreground"
+                                  }`}
+                                >
+                                  {c.role}
+                                </span>
+                              }
+                            >
+                              <select
+                                value={c.role}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={async (e) => {
+                                  e.stopPropagation();
+                                  const newRole = e.target.value as "customer" | "admin" | "staff";
+                                  try {
+                                    await mutateUserRole({
+                                      data: { userId: c.user_id, role: newRole },
+                                    });
+                                    toast.success(`Updated ${c.name}'s role to ${newRole}`);
+                                    customersQuery.refetch();
+                                  } catch (err) {
+                                    toast.error(
+                                      err instanceof Error ? err.message : "Failed to update role",
+                                    );
+                                  }
+                                }}
+                                className={`rounded-lg px-2.5 py-1 text-xs font-semibold capitalize border border-border bg-card cursor-pointer focus:ring-1 focus:ring-primary ${
                                   c.role === "admin"
-                                    ? "bg-primary/15 text-primary"
+                                    ? "text-primary border-primary/30"
                                     : c.role === "staff"
-                                      ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-                                      : "bg-muted text-muted-foreground"
+                                      ? "text-amber-600 border-amber-500/30 dark:text-amber-400"
+                                      : "text-muted-foreground"
                                 }`}
                               >
-                                {c.role}
-                              </span>
-                            }
-                          >
-                            <select
-                              value={c.role}
-                              onChange={async (e) => {
-                                const newRole = e.target.value as "customer" | "admin" | "staff";
-                                try {
-                                  await mutateUserRole({
-                                    data: { userId: c.user_id, role: newRole },
-                                  });
-                                  toast.success(`Updated ${c.name}'s role to ${newRole}`);
-                                  customersQuery.refetch();
-                                } catch (err) {
-                                  toast.error(
-                                    err instanceof Error ? err.message : "Failed to update role",
-                                  );
-                                }
-                              }}
-                              className={`rounded-lg px-2.5 py-1 text-xs font-semibold capitalize border border-border bg-card cursor-pointer focus:ring-1 focus:ring-primary ${
-                                c.role === "admin"
-                                  ? "text-primary border-primary/30"
-                                  : c.role === "staff"
-                                    ? "text-amber-600 border-amber-500/30 dark:text-amber-400"
-                                    : "text-muted-foreground"
-                              }`}
-                            >
-                              <option value="customer">Customer</option>
-                              <option value="staff">Staff</option>
-                              <option value="admin">Admin</option>
-                            </select>
-                          </Can>
+                                <option value="customer">Customer</option>
+                                <option value="staff">Staff</option>
+                                <option value="admin">Admin</option>
+                              </select>
+                            </Can>
+                          )}
                         </td>
                         <td className="px-5 py-4 font-semibold text-foreground">
                           {c.orders_count}
                         </td>
                         {hasPermission("revenue.view") && (
-                          <td className="px-5 py-4 font-bold text-primary">{etb(c.total_spent)}</td>
+                          <td className="px-5 py-4 font-bold text-primary">
+                            {etb(c.total_spent)}
+                          </td>
                         )}
                         <td className="px-5 py-4 text-xs text-muted-foreground/60">
                           {c.created_at}
@@ -3198,228 +3237,408 @@ export function AdminDashboard() {
           </div>
 
           {/* Customer Detail Modal */}
-          {customerDetailOpen && customerDetailUserId && (
+          {customerDetailOpen && selectedCustomerTarget && (
             <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
-                <div className="flex justify-between mb-4">
-                  <h3 className="text-lg font-semibold">Customer Detail</h3>
+              <div className="bg-card text-card-foreground border border-border rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6 space-y-6">
+                <div className="flex justify-between items-center pb-3 border-b border-border">
+                  <div>
+                    <h3 className="text-xl font-bold tracking-tight">Customer Record</h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Contact details, complete order & quote history, and recorded communications
+                    </p>
+                  </div>
                   <Button
                     variant="ghost"
+                    size="sm"
                     onClick={() => {
                       setCustomerDetailOpen(false);
-                      setCustomerDetailUserId(null);
+                      setSelectedCustomerTarget(null);
                     }}
                   >
                     ✕
                   </Button>
                 </div>
                 {customerDetailQuery.data ? (
-                  <>
-                    <div className="grid grid-cols-2 gap-4 mb-6">
-                      <div>
-                        <span className="text-xs text-gray-500">Name</span>
-                        <p className="font-medium">{(customerDetailQuery.data as any).name}</p>
-                      </div>
-                      <div>
-                        <span className="text-xs text-gray-500">Email</span>
-                        <p className="font-medium">{(customerDetailQuery.data as any).email}</p>
-                      </div>
-                      <div>
-                        <span className="text-xs text-gray-500">Phone</span>
-                        <p>{(customerDetailQuery.data as any).phone || "—"}</p>
-                      </div>
-                      <div>
-                        <span className="text-xs text-gray-500">Total Orders</span>
-                        <p className="font-semibold">
-                          {(customerDetailQuery.data as any).orders_count}
-                        </p>
-                      </div>
-                      {canViewRevenue && (
-                        <div>
-                          <span className="text-xs text-gray-500">Total Spent</span>
-                          <p className="font-semibold">
-                            {etb((customerDetailQuery.data as any).total_spent)}
-                          </p>
+                  (() => {
+                    const cust = customerDetailQuery.data as any;
+                    return (
+                      <div className="space-y-6">
+                        {/* Summary Badges & Contact */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-4 rounded-xl bg-muted/40 border border-border">
+                          <div>
+                            <span className="text-xs text-muted-foreground">Name</span>
+                            <p className="font-semibold text-foreground">{cust.name}</p>
+                          </div>
+                          <div>
+                            <span className="text-xs text-muted-foreground">Email</span>
+                            <p className="font-semibold text-foreground text-sm break-all">
+                              {cust.email}
+                            </p>
+                          </div>
+                          <div>
+                            <span className="text-xs text-muted-foreground">Phone</span>
+                            <p className="font-medium text-foreground">{cust.phone || "—"}</p>
+                          </div>
+                          <div>
+                            <span className="text-xs text-muted-foreground">Account Type</span>
+                            <p className="font-semibold text-foreground capitalize">
+                              {cust.is_guest ? "Guest Customer" : cust.role}
+                            </p>
+                          </div>
+                          <div>
+                            <span className="text-xs text-muted-foreground">Total Orders</span>
+                            <p className="font-bold text-lg text-foreground">
+                              {cust.orders_count}
+                            </p>
+                          </div>
+                          {canViewRevenue && (
+                            <div>
+                              <span className="text-xs text-muted-foreground">
+                                Completed Spend (Delivered)
+                              </span>
+                              <p className="font-bold text-lg text-primary">
+                                {etb(cust.total_spent)}
+                              </p>
+                            </div>
+                          )}
+                          <div>
+                            <span className="text-xs text-muted-foreground">Joined / First Seen</span>
+                            <p className="text-sm text-foreground">{cust.created_at}</p>
+                          </div>
+                          <div>
+                            <span className="text-xs text-muted-foreground">Account Status</span>
+                            <p className="text-sm font-medium">
+                              {cust.is_guest ? (
+                                <span className="text-sky-600">Guest Record</span>
+                              ) : cust.is_active ? (
+                                <span className="text-emerald-600">Active Account</span>
+                              ) : (
+                                <span className="text-rose-600">Blocked Account</span>
+                              )}
+                            </p>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                    <Can permission="customers.block">
-                      <Button
-                        size="sm"
-                        variant={
-                          (customerDetailQuery.data as any).is_active ? "destructive" : "outline"
-                        }
-                        className="mb-4"
-                        onClick={() =>
-                          mutateBlockCustomer({
-                            data: {
-                              user_id: customerDetailUserId,
-                              block: !!(customerDetailQuery.data as any).is_active,
-                            },
-                          } as any)
-                            .then(() => {
-                              toast.success(
-                                (customerDetailQuery.data as any).is_active
-                                  ? "Customer blocked"
-                                  : "Customer unblocked",
-                              );
-                              qc.invalidateQueries({ queryKey: ["admin", "customers"] });
-                              qc.invalidateQueries({
-                                queryKey: ["customer-detail", customerDetailUserId],
-                              });
-                              setCustomerDetailOpen(false);
-                            })
-                            .catch((e: Error) => toast.error(e.message))
-                        }
-                      >
-                        {(customerDetailQuery.data as any).is_active
-                          ? "Block Customer"
-                          : "Unblock Customer"}
-                      </Button>
-                    </Can>
-                    <h4 className="font-semibold mt-2 mb-3">Recent Orders</h4>
-                    <div className="overflow-hidden rounded-xl border border-border">
-                      <table className="w-full text-sm text-left">
-                        <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
-                          <tr>
-                            <th className="px-4 py-3">#</th>
-                            {canViewRevenue && <th className="px-4 py-3">Total</th>}
-                            <th className="px-4 py-3">Status</th>
-                            <th className="px-4 py-3">Date</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {((customerDetailQuery.data as any).recent_orders ?? []).length === 0 ? (
-                            <tr>
-                              <td
-                                colSpan={canViewRevenue ? 4 : 3}
-                                className="py-6 text-center text-muted-foreground/60 text-sm"
-                              >
-                                No orders yet.
-                              </td>
-                            </tr>
-                          ) : (
-                            ((customerDetailQuery.data as any).recent_orders ?? []).map(
-                              (o: any) => (
-                                <tr key={o.order_id}>
-                                  <td className="px-4 py-3">#{o.order_id}</td>
-                                  {canViewRevenue && (
-                                    <td className="px-4 py-3 font-semibold">{etb(o.total)}</td>
-                                  )}
-                                  <td className="px-4 py-3">
-                                    <StatusBadge s={o.status} />
-                                  </td>
-                                  <td className="px-4 py-3 text-xs text-muted-foreground">
-                                    {o.created_at}
-                                  </td>
-                                </tr>
-                              ),
-                            )
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
 
-                    {/* Related Quotes */}
-                    <h4 className="font-semibold mt-5 mb-3">Related Quotes</h4>
-                    <div className="overflow-hidden rounded-xl border border-border">
-                      <table className="w-full text-sm text-left">
-                        <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
-                          <tr>
-                            <th className="px-4 py-3">#</th>
-                            <th className="px-4 py-3">Subject</th>
-                            {canViewRevenue && <th className="px-4 py-3">Amount</th>}
-                            <th className="px-4 py-3">Status</th>
-                            <th className="px-4 py-3">Date</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {((customerDetailQuery.data as any).recent_quotes ?? []).length === 0 ? (
-                            <tr>
-                              <td
-                                colSpan={canViewRevenue ? 5 : 4}
-                                className="py-6 text-center text-muted-foreground/60 text-sm"
-                              >
-                                No quote requests found.
-                              </td>
-                            </tr>
-                          ) : (
-                            ((customerDetailQuery.data as any).recent_quotes ?? []).map(
-                              (q: any) => (
-                                <tr key={q.quote_id}>
-                                  <td className="px-4 py-3 font-mono text-xs">#{q.quote_id}</td>
-                                  <td className="px-4 py-3">{q.subject}</td>
-                                  {canViewRevenue && (
-                                    <td className="px-4 py-3 font-semibold">
-                                      {q.quoted_amount ? etb(q.quoted_amount) : "—"}
-                                    </td>
-                                  )}
-                                  <td className="px-4 py-3">
-                                    <StatusBadge s={q.status} />
-                                  </td>
-                                  <td className="px-4 py-3 text-xs text-muted-foreground">
-                                    {q.created_at}
-                                  </td>
-                                </tr>
-                              ),
-                            )
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
+                        {/* Guest Notice or Block Button */}
+                        {!cust.is_guest && cust.user_id ? (
+                          <Can permission="customers.block">
+                            <Button
+                              size="sm"
+                              variant={cust.is_active ? "destructive" : "outline"}
+                              onClick={() =>
+                                mutateBlockCustomer({
+                                  data: {
+                                    user_id: cust.user_id,
+                                    block: !!cust.is_active,
+                                  },
+                                } as any)
+                                  .then(() => {
+                                    toast.success(
+                                      cust.is_active
+                                        ? "Customer account blocked"
+                                        : "Customer account unblocked",
+                                    );
+                                    qc.invalidateQueries({ queryKey: ["admin", "customers"] });
+                                    qc.invalidateQueries({
+                                      queryKey: [
+                                        "customer-detail",
+                                        selectedCustomerTarget?.user_id,
+                                        selectedCustomerTarget?.email,
+                                      ],
+                                    });
+                                    setCustomerDetailOpen(false);
+                                  })
+                                  .catch((e: Error) => toast.error(e.message))
+                              }
+                            >
+                              {cust.is_active ? "Block Customer Account" : "Unblock Customer Account"}
+                            </Button>
+                          </Can>
+                        ) : (
+                          <div className="text-xs text-muted-foreground bg-primary/5 p-3 rounded-lg border border-primary/20">
+                            <strong>Guest Customer:</strong> Aggregated from verified order, quote, and contact message records without requiring account registration.
+                          </div>
+                        )}
 
-                    {/* Related Messages */}
-                    <h4 className="font-semibold mt-5 mb-3">Related Inquiries & Messages</h4>
-                    <div className="overflow-hidden rounded-xl border border-border">
-                      <table className="w-full text-sm text-left">
-                        <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
-                          <tr>
-                            <th className="px-4 py-3">#</th>
-                            <th className="px-4 py-3">Subject</th>
-                            <th className="px-4 py-3">Status</th>
-                            <th className="px-4 py-3">Date</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border">
-                          {((customerDetailQuery.data as any).recent_messages ?? []).length === 0 ? (
-                            <tr>
-                              <td
-                                colSpan={4}
-                                className="py-6 text-center text-muted-foreground/60 text-sm"
-                              >
-                                No contact messages found.
-                              </td>
-                            </tr>
-                          ) : (
-                            ((customerDetailQuery.data as any).recent_messages ?? []).map(
-                              (m: any) => (
-                                <tr key={m.id}>
-                                  <td className="px-4 py-3 font-mono text-xs">#{m.id}</td>
-                                  <td className="px-4 py-3">{m.subject}</td>
-                                  <td className="px-4 py-3">
-                                    <span
-                                      className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-                                        m.is_read
-                                          ? "bg-muted text-muted-foreground"
-                                          : "bg-primary/15 text-primary"
-                                      }`}
+                        {/* Order History */}
+                        <div className="space-y-2">
+                          <h4 className="font-semibold text-sm flex items-center justify-between text-foreground">
+                            <span>Order History</span>
+                            <span className="text-xs text-muted-foreground font-normal">
+                              {(cust.recent_orders ?? []).length} orders recorded
+                            </span>
+                          </h4>
+                          <div className="overflow-hidden rounded-xl border border-border">
+                            <table className="w-full text-sm text-left">
+                              <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
+                                <tr>
+                                  <th className="px-4 py-2.5">Order</th>
+                                  {canViewRevenue && <th className="px-4 py-2.5">Total</th>}
+                                  <th className="px-4 py-2.5">Status</th>
+                                  <th className="px-4 py-2.5">Address</th>
+                                  <th className="px-4 py-2.5">Date</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {(cust.recent_orders ?? []).length === 0 ? (
+                                  <tr>
+                                    <td
+                                      colSpan={canViewRevenue ? 5 : 4}
+                                      className="py-6 text-center text-muted-foreground/60 text-xs"
                                     >
-                                      {m.is_read ? "Read" : "Unread"}
-                                    </span>
-                                  </td>
-                                  <td className="px-4 py-3 text-xs text-muted-foreground">
-                                    {m.created_at}
-                                  </td>
+                                      No orders recorded for this customer.
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  (cust.recent_orders ?? []).map((o: any) => (
+                                    <tr key={o.order_id}>
+                                      <td className="px-4 py-2.5 font-bold text-primary font-mono text-xs">
+                                        #{o.order_id}
+                                      </td>
+                                      {canViewRevenue && (
+                                        <td className="px-4 py-2.5 font-semibold text-foreground">
+                                          {etb(o.total)}
+                                        </td>
+                                      )}
+                                      <td className="px-4 py-2.5">
+                                        <StatusBadge s={o.status} />
+                                      </td>
+                                      <td className="px-4 py-2.5 text-xs text-muted-foreground max-w-[200px] truncate">
+                                        {o.address || "—"}
+                                      </td>
+                                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                                        {o.created_at}
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Quote History */}
+                        <div className="space-y-2">
+                          <h4 className="font-semibold text-sm flex items-center justify-between text-foreground">
+                            <span>Quote Requests</span>
+                            <span className="text-xs text-muted-foreground font-normal">
+                              {(cust.recent_quotes ?? []).length} quotes recorded
+                            </span>
+                          </h4>
+                          <div className="overflow-hidden rounded-xl border border-border">
+                            <table className="w-full text-sm text-left">
+                              <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
+                                <tr>
+                                  <th className="px-4 py-2.5">Quote</th>
+                                  <th className="px-4 py-2.5">Subject</th>
+                                  {canViewRevenue && <th className="px-4 py-2.5">Amount</th>}
+                                  <th className="px-4 py-2.5">Status</th>
+                                  <th className="px-4 py-2.5">Date</th>
                                 </tr>
-                              ),
-                            )
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {(cust.recent_quotes ?? []).length === 0 ? (
+                                  <tr>
+                                    <td
+                                      colSpan={canViewRevenue ? 5 : 4}
+                                      className="py-6 text-center text-muted-foreground/60 text-xs"
+                                    >
+                                      No quote requests found.
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  (cust.recent_quotes ?? []).map((q: any) => (
+                                    <tr key={q.quote_id}>
+                                      <td className="px-4 py-2.5 font-mono text-xs font-bold text-foreground">
+                                        #{q.quote_id}
+                                      </td>
+                                      <td className="px-4 py-2.5 text-foreground">{q.subject}</td>
+                                      {canViewRevenue && (
+                                        <td className="px-4 py-2.5 font-semibold text-foreground">
+                                          {q.quoted_amount ? etb(q.quoted_amount) : "—"}
+                                        </td>
+                                      )}
+                                      <td className="px-4 py-2.5">
+                                        <StatusBadge s={q.status} />
+                                      </td>
+                                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                                        {q.created_at}
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Communication History */}
+                        <div className="space-y-4">
+                          <h4 className="font-semibold text-sm text-foreground">
+                            Communication History
+                          </h4>
+
+                          {/* Contact Inquiries */}
+                          <div className="space-y-2">
+                            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                              Inbound Inquiries & Messages
+                            </span>
+                            <div className="overflow-hidden rounded-xl border border-border">
+                              <table className="w-full text-sm text-left">
+                                <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
+                                  <tr>
+                                    <th className="px-4 py-2.5">#</th>
+                                    <th className="px-4 py-2.5">Subject</th>
+                                    <th className="px-4 py-2.5">Message Excerpt</th>
+                                    <th className="px-4 py-2.5">Status</th>
+                                    <th className="px-4 py-2.5">Date</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-border">
+                                  {(cust.recent_messages ?? []).length === 0 ? (
+                                    <tr>
+                                      <td
+                                        colSpan={5}
+                                        className="py-4 text-center text-muted-foreground/60 text-xs"
+                                      >
+                                        No contact inquiries found.
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    (cust.recent_messages ?? []).map((m: any) => (
+                                      <tr key={m.id}>
+                                        <td className="px-4 py-2.5 font-mono text-xs">#{m.id}</td>
+                                        <td className="px-4 py-2.5 font-medium text-foreground">
+                                          {m.subject}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-xs text-muted-foreground max-w-[250px] truncate">
+                                          {m.message || "—"}
+                                        </td>
+                                        <td className="px-4 py-2.5">
+                                          <span
+                                            className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                              m.is_read
+                                                ? "bg-muted text-muted-foreground"
+                                                : "bg-primary/15 text-primary"
+                                            }`}
+                                          >
+                                            {m.is_read ? "Read" : "Unread"}
+                                          </span>
+                                        </td>
+                                        <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                                          {m.created_at}
+                                        </td>
+                                      </tr>
+                                    ))
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+
+                          {/* Support Tickets */}
+                          {(cust.recent_tickets ?? []).length > 0 && (
+                            <div className="space-y-2">
+                              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                                Support & Warranty Tickets
+                              </span>
+                              <div className="overflow-hidden rounded-xl border border-border">
+                                <table className="w-full text-sm text-left">
+                                  <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
+                                    <tr>
+                                      <th className="px-4 py-2.5">Ticket</th>
+                                      <th className="px-4 py-2.5">Subject</th>
+                                      <th className="px-4 py-2.5">Category</th>
+                                      <th className="px-4 py-2.5">Priority</th>
+                                      <th className="px-4 py-2.5">Status</th>
+                                      <th className="px-4 py-2.5">Date</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-border">
+                                    {(cust.recent_tickets ?? []).map((t: any) => (
+                                      <tr key={t.id}>
+                                        <td className="px-4 py-2.5 font-mono text-xs font-bold text-primary">
+                                          {t.ticket_code || `#${t.id}`}
+                                        </td>
+                                        <td className="px-4 py-2.5 font-medium text-foreground">
+                                          {t.subject}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                                          {t.category}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-xs">
+                                          <span
+                                            className={`px-2 py-0.5 rounded-full font-semibold ${
+                                              t.priority === "Urgent"
+                                                ? "bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300"
+                                                : t.priority === "High"
+                                                  ? "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+                                                  : "bg-muted text-muted-foreground"
+                                            }`}
+                                          >
+                                            {t.priority}
+                                          </span>
+                                        </td>
+                                        <td className="px-4 py-2.5">
+                                          <StatusBadge s={t.status} />
+                                        </td>
+                                        <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                                          {t.created_at}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
                           )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
+
+                          {/* Order Messages */}
+                          {(cust.recent_order_messages ?? []).length > 0 && (
+                            <div className="space-y-2">
+                              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                                Order Communication Feed
+                              </span>
+                              <div className="overflow-hidden rounded-xl border border-border">
+                                <table className="w-full text-sm text-left">
+                                  <thead className="border-b border-border bg-muted/50 text-xs font-semibold text-muted-foreground uppercase">
+                                    <tr>
+                                      <th className="px-4 py-2.5">Order</th>
+                                      <th className="px-4 py-2.5">Sender</th>
+                                      <th className="px-4 py-2.5">Message</th>
+                                      <th className="px-4 py-2.5">Timestamp</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-border">
+                                    {(cust.recent_order_messages ?? []).map((om: any) => (
+                                      <tr key={om.id}>
+                                        <td className="px-4 py-2.5 font-mono text-xs text-primary font-bold">
+                                          #{om.order_id}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-xs font-semibold text-foreground">
+                                          {om.sender_name} ({om.sender_type})
+                                        </td>
+                                        <td className="px-4 py-2.5 text-xs text-muted-foreground max-w-[300px] truncate">
+                                          {om.body}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                                          {om.created_at}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()
                 ) : (
-                  <p className="text-center text-gray-500 py-8">Loading…</p>
+                  <p className="text-center text-muted-foreground py-8 text-sm">
+                    Loading customer records…
+                  </p>
                 )}
               </div>
             </div>
