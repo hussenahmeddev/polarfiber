@@ -1965,9 +1965,9 @@ export async function loadUnifiedCustomers(c: mysql.Connection): Promise<Custome
 
   // Process orders
   for (const o of orders) {
-    let email = o.email;
-    if (!email && o.user_id && userToEmail.has(o.user_id)) {
-      email = userToEmail.get(o.user_id);
+    let email: string | null = o.email ?? null;
+    if (!email && o.user_id) {
+      email = userToEmail.get(o.user_id) ?? null;
     }
     const cust = getOrCreate(email, o.customer_name, o.customer_phone, o.created_at, o.user_id);
     if (cust) {
@@ -1987,9 +1987,9 @@ export async function loadUnifiedCustomers(c: mysql.Connection): Promise<Custome
 
   // Process quotes
   for (const q of quotes) {
-    let email = q.email;
-    if (!email && q.user_id && userToEmail.has(q.user_id)) {
-      email = userToEmail.get(q.user_id);
+    let email: string | null = q.email || null;
+    if (!email && q.user_id) {
+      email = userToEmail.get(q.user_id) ?? null;
     }
     const cust = getOrCreate(email, q.name, null, q.created_at, q.user_id);
     if (cust && cust.is_guest && q.name && cust.name === "Guest Customer") {
@@ -2008,9 +2008,9 @@ export async function loadUnifiedCustomers(c: mysql.Connection): Promise<Custome
 
   // Process support tickets
   for (const t of tickets) {
-    let email = t.customer_email;
-    if (!email && t.user_id && userToEmail.has(t.user_id)) {
-      email = userToEmail.get(t.user_id);
+    let email: string | null = t.customer_email || null;
+    if (!email && t.user_id) {
+      email = userToEmail.get(t.user_id) ?? null;
     }
     const cust = getOrCreate(email, t.customer_name, null, t.created_at, t.user_id);
     if (cust && cust.is_guest && t.customer_name && cust.name === "Guest Customer") {
@@ -4284,7 +4284,7 @@ export const getCustomerDetail = createServerFn({ method: "POST" })
         user_id: number | null;
         name: string;
         email: string;
-        phone: string;
+        phone: string | null;
         role: string;
         is_active: number;
         created_at: string;
@@ -4348,7 +4348,7 @@ export const getCustomerDetail = createServerFn({ method: "POST" })
           user_id: match.user_id,
           name: match.name,
           email: match.email,
-          phone: match.phone,
+          phone: match.phone || null,
           role: "guest",
           is_active: 1,
           created_at: match.created_at,
